@@ -52,7 +52,7 @@ Every constant in `touch.py`, `deadball.py`, `decode.py`. "Reason" is what the b
 | `deadball.HSR_MPS` | 5.5 m/s | high-speed-running threshold | standard in football physical reports (19.8 km/h). **dev**: equals the synthetic chaser speed; 5.0 and 6.0 are flat |
 | `deadball.SLOW_FRAC` / `SLOW_WIDTH` | 0.9 / 0.03 | walking share that signals a stoppage; softness | at most ~2 of 20 outfielders above walking pace; ~1 player of softness. Synthetic 0.85/0.95 gives -0.018/-0.013 |
 | `deadball.SMOOTH_S` | 1.0 s | player cues averaged | a stoppage is a state, not a frame |
-| `deadball.SPEED_LAG` | 2 frames | half-window of position-derived speed | UNJUSTIFIED - ask lead |
+| `deadball.SPEED_LAG` | 2 frames | half-window of position-derived speed | 0.16 s central difference, near the tracker speed it replaces; used only where the ATD speed (documented m/s) is NaN. Noise ~1.4 x position error / 0.16 s; check and fallback in DECISIONS.md |
 | `deadball.BALL_WIN_S` | 1.0 s | ball displacement window | long enough to ignore jitter |
 | `deadball.BALL_STILL_MPS` / `BALL_PASS_MPS` | 1.5 / 8.0 m/s | ball "still" / "passing" | slower than walking / slowest typical ground pass |
 | `deadball.PERSIST_S` / `PERSIST_FRAC` | 2.0 s / 0.75 | ball cues must hold this long, on this share of sightings | longer than a lofted ball's spell beyond the line or a shielding pause; tolerates a glitch or two |
@@ -60,12 +60,12 @@ Every constant in `touch.py`, `deadball.py`, `decode.py`. "Reason" is what the b
 | `deadball.LINE_M` | 1.0 m | throw-in band | taken on or behind the touchline |
 | `deadball.GOAL_AREA` | (6.0, 10.0) m | goal-area depth, half-width | goal area 5.5 m deep, 18.32 m wide, plus error |
 | `deadball.OWN_HALF_FRAC` | 0.95 | kickoff share in own half | allows one mis-tracked slot |
-| `deadball.DEAD_BIAS` | -2.5 | prior dead log-odds | inherited from v1, "kept, not re-tuned"; v1 gave no per-value reason - UNJUSTIFIED - ask lead |
-| `deadball.W_SLOW` / `W_OUT` | 3.0 / 5.0 | cue weights (nats) | inherited from v1 unchanged; no per-value reason - UNJUSTIFIED - ask lead |
-| `deadball.W_HSR` | -2.0 per runner, cap 2 | sprinting means live | standard high-speed-running band; the weight itself has no stated reason - UNJUSTIFIED - ask lead |
+| `deadball.DEAD_BIAS` | -2.5 | prior dead log-odds | not a base rate (the ball is out of play roughly a third of the time): log-odds with every cue silent, so a cue-less 3 s D costs >130 nats. Sets the cue lattice, see DECISIONS.md |
+| `deadball.W_SLOW` / `W_OUT` | 3.0 / 5.0 | cue weights (nats) | with the bias: walking alone gives +0.5 (leans dead, vetoed by one sustained sprinter or a pass-speed ball); ball out alone gives +2.5 and decides (Law 9). See DECISIONS.md |
+| `deadball.W_HSR` | -2.0 per runner, cap 2 | sprinting means live | sprinting >19.8 km/h for 1 s (smoothed) means live: one runner turns walking-alone to -1.5, two turn ball-out to -1.5; the cap limits ghost-slot damage. See DECISIONS.md |
 | `deadball.W_STILL`, `W_SPOT`, `W_KICKOFF`, `W_PASS` | 1.5, 2.0, 3.0, -2.0 | other cue weights | "moderate cues that cannot outvote the player cue alone". Synthetic: the four ball cues together add +0.003 spellF1, i.e. noise; the kickoff cue never fires on synthetic data |
 | `decode.SWITCH_COST` | 30 | H<->A penalty (nats) | ~1.5 s of new-team touching flips; a deflection (flip and back) costs 60. Synthetic plateau: 20/45 gives 0.598/0.593 (cand 02 alone) |
-| `decode.DEAD_COST` | 12 | live<->dead penalty | v1's value, untouched - UNJUSTIFIED - ask lead. Synthetic plateau: 12/30 gives 0.592/0.595 (cand 02 alone) |
+| `decode.DEAD_COST` | 12 | live<->dead penalty | round trip 24 < 30 is intended: restarts often change team (Laws 13, 15-17); the 3 s floor makes a cue-less fake D cost >130 nats. Synthetic 12/30: 0.592/0.595. See DECISIONS.md |
 | `decode.MIN_DEAD_S` | 3.0 s | minimum stoppage | fastest real restarts (quick throw-in, free kick). Synthetic: 5 s scored higher (0.537 vs 0.530); 3 s kept on football grounds |
 | `decode.EPS` | 1e-6 | probability clip | keeps log-probabilities finite |
 
@@ -148,5 +148,5 @@ Nothing below has been measured on the provided game. Do not read the synthetic 
 4. Home = first ATD team is an assumption from `starter/baseline.py` and DATA.md.
 5. Whether `HOLD` and `CLIP` were set after viewing synthetic dev seeds is not recorded in the briefs; ask lead.
 6. The WALK_MPS premise (real stoppage players walk below 2 m/s in the ATD speed unit) is unchecked until `analysis.real_checks` runs on the real data.
-7. Section 3 lists `UNJUSTIFIED - ask lead` where neither briefs nor code comments give a reason; the lead may hold reasons that are not written down.
+7. The five section-3 rows formerly marked `UNJUSTIFIED - ask lead` (SPEED_LAG, DEAD_BIAS, W_SLOW/W_OUT, W_HSR, DEAD_COST) were decided in `mtah/experiments/briefs/DECISIONS.md`. Values are unchanged; the reasons are football priors or mechanism arguments, not fits, each with a pre-registered unlabeled check.
 8. Python 3.8 to 3.11 support is claimed from the pinned requirements; `sliding_window_view` needs numpy 1.20 or newer (pinned 1.24.4).
