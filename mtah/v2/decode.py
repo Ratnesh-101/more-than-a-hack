@@ -73,16 +73,7 @@ def _viterbi_min_dead(e, k, sw, dc):
 
 def kickoff_frame(trk, half):
     """Start frame of half's Kick Off (Start) tag if present in trk, else None."""
-    if isinstance(trk, dict):
-        ko = trk.get("kickoffs")
-        if ko and half in ko:
-            return ko[half]
-        if "smart_tagging" in trk and trk["smart_tagging"]:
-            from mtah.v2 import tracking
-            ko = tracking.parse_kickoffs(trk["smart_tagging"], fps=trk.get("fps", 25))
-            if ko and half in ko:
-                return ko[half]
-    return None
+    return (trk.get("kickoffs") or {}).get(half)
 
 
 def decode_half(trk, half, lo, hi, decode_segment):

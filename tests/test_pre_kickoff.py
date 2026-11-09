@@ -6,6 +6,8 @@ Tests the champion decoder and fallbacks (touch_only, semi_markov) on:
   (3) a half whose kickoff tag starts at the first graded frame -> unchanged
 """
 
+import xml.etree.ElementTree as ET
+
 import numpy as np
 import pytest
 
@@ -173,10 +175,124 @@ def test_parse_kickoffs_from_events():
     assert parsed == {1: 250, 2: 5000}
 
 
-def test_parse_kickoffs_case_and_seconds():
-    """Test case-insensitivity and start_s conversion."""
+def test_parse_kickoffs_matches_case_insensitively_and_first_tag_wins():
+    """Code and Type are matched like starter.load_smart_tagging.check_time_base; first tag wins."""
     events = [
-        {"code": "set pieces", "start_s": 10.0, "tags": {"Type": "kick off (start)", "Half": "First Half"}},
+        {"code": "set pieces", "start_frame": 250, "tags": {"Type": "kick off (start)", "Half": "1st Half"}},
+        {"code": "SET PIECES", "start_frame": 999, "tags": {"Type": "Kick Off (Start)", "Half": "1st Half"}},
+        {"code": "SET PIECES", "start_frame": 500, "tags": {"Type": "Kick Off (After Goal)", "Half": "1st Half"}},
     ]
-    parsed = tracking.parse_kickoffs(events, fps=25)
-    assert parsed == {1: 250}
+    assert tracking.parse_kickoffs(events) == {1: 250}
+
+
+def test_parse_kickoffs_ignores_unrelated_tags_with_odd_halves():
+    """Only a matching kickoff tag has to carry a valid Half."""
+    events = [{"code": "SET PIECES", "start_frame": 7, "tags": {"Type": "Corner Kick", "Half": "Extra Time"}},
+              {"code": "BUILD UP", "start_frame": 8, "tags": {"Half": None}}]
+    assert tracking.parse_kickoffs(events) == {}
+
+
+@pytest.mark.parametrize("tags", [{"Type": "Kick Off (Start)", "Half": "3rd Half"},
+                                  {"Type": "Kick Off (Start)", "Half": ""},
+                                  {"Type": "Kick Off (Start)"}])
+def test_parse_kickoffs_unknown_half_raises(tags):
+    with pytest.raises(ValueError, match="Half"):
+        tracking.parse_kickoffs([{"code": "SET PIECES", "start_frame": 7, "tags": tags}])
+
+
+def test_parse_kickoffs_without_start_frame_raises():
+    with pytest.raises(KeyError):
+        tracking.parse_kickoffs([{"code": "SET PIECES",
+                                  "tags": {"Type": "Kick Off (Start)", "Half": "1st Half"}}])
+
+
+# --- loading the Smart Tagging file: valid, malformed, missing -----------------------------------
+
+TAGGING = "BAR-ATH_tactical_smart_tagging.xml"
+
+
+def _instance(start, **tags):
+    labels = "".join("<label><group>{}</group><text>{}</text></label>".format(g, t)
+                     for g, t in tags.items())
+    return ("<instance><start>{}</start><end>{}</end><code>SET PIECES</code>{}</instance>"
+            .format(start, start + 5, labels))
+
+
+def _write_tagging(data_dir, raw):
+    folder = data_dir / "tactical"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / TAGGING).write_text(raw)
+
+
+def _tagging_xml(*instances):
+    return "<file><ALL_INSTANCES>{}</ALL_INSTANCES></file>".format("".join(instances))
+
+
+VALID = _tagging_xml(
+    _instance(10.0, Type="Kick Off (Start)", Half="1st Half"),
+    _instance(50.0, Type="Corner Kick", Half="1st Half"),
+    _instance(60.0, Type="Kick Off (After Goal)", Half="1st Half"),
+    _instance(100.0, Type="Kick Off (Start)", Half="2nd Half"))
+
+
+def test_load_kickoffs_reads_the_start_kickoff_of_each_half(tmp_path):
+    _write_tagging(tmp_path, VALID)
+    assert tracking.load_kickoffs(data_dir=str(tmp_path)) == {1: 250, 2: 2500}
+
+
+@pytest.mark.parametrize("raw, exc", [
+    ("<file><ALL_INSTANCES><instance>", ET.ParseError),                       # truncated XML
+    ("<file><instance><end>5</end><code>X</code></instance></file>", TypeError),   # no <start>
+    ("<file><instance><start>abc</start><end>5</end><code>X</code></instance></file>", ValueError),
+])
+def test_malformed_smart_tagging_raises(tmp_path, capsys, raw, exc):
+    _write_tagging(tmp_path, raw)
+    with pytest.raises(exc):
+        tracking.load_kickoffs(data_dir=str(tmp_path))
+    assert capsys.readouterr().err == "", "a present but unreadable file must not look 'missing'"
+
+
+def test_kickoff_tag_with_unknown_half_in_the_file_raises(tmp_path):
+    _write_tagging(tmp_path, _tagging_xml(_instance(10.0, Type="Kick Off (Start)", Half="Extra Time")))
+    with pytest.raises(ValueError, match="Half"):
+        tracking.load_kickoffs(data_dir=str(tmp_path))
+
+
+def test_missing_smart_tagging_warns_once_and_falls_back_to_empty(tmp_path, capsys):
+    assert tracking.load_kickoffs(data_dir=str(tmp_path)) == {}
+    captured = capsys.readouterr()
+    lines = captured.err.splitlines()
+    assert captured.out == ""
+    assert len(lines) == 1 and lines[0].startswith("warning:") and "Smart Tagging" in lines[0]
+
+
+# --- the same behaviour at the pipeline entry point (tiny stubbed tracking) ------------------------
+
+def _tiny_tracking(monkeypatch, root, n=20):
+    """Make tracking.from_atd cheap: n frames, stubbed ATD stream, placeholder ATD files."""
+    nan = lambda *shape: np.full(shape, np.nan, dtype=np.float32)  # noqa: E731
+    monkeypatch.setattr(tracking.games, "source_frames", lambda *a, **k: n)
+    monkeypatch.setattr(tracking, "_stream", lambda *a: (
+        nan(n, 46), nan(n, 46), nan(n, 46), np.zeros(46, dtype=np.int8), nan(n), nan(n)))
+    folder = root / "tactical"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "BAR-ATH_tactical_atd.xml").write_text("")
+    (folder / "BAR-ATH_tactical_atd.txt").write_text("")
+
+
+def test_from_atd_carries_the_kickoffs_and_raises_on_a_malformed_file(tmp_path, monkeypatch):
+    _tiny_tracking(monkeypatch, tmp_path)
+    _write_tagging(tmp_path, VALID)
+    assert tracking.from_atd(data_dir=str(tmp_path))["kickoffs"] == {1: 250, 2: 2500}   # fresh parse
+    assert tracking.from_atd(data_dir=str(tmp_path))["kickoffs"] == {1: 250, 2: 2500}   # cache hit
+    _write_tagging(tmp_path, "<file><ALL_INSTANCES><instance>")
+    with pytest.raises(ET.ParseError):                                                 # cache hit
+        tracking.from_atd(data_dir=str(tmp_path))
+    with pytest.raises(ET.ParseError):                                                 # fresh parse
+        tracking.from_atd(data_dir=str(tmp_path), refresh=True)
+
+
+def test_from_atd_without_smart_tagging_warns_and_has_no_kickoffs(tmp_path, monkeypatch, capsys):
+    _tiny_tracking(monkeypatch, tmp_path)
+    assert tracking.from_atd(data_dir=str(tmp_path))["kickoffs"] == {}
+    assert len(capsys.readouterr().err.splitlines()) == 1

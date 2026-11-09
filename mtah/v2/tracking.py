@@ -7,12 +7,12 @@ A Trk is a plain dict (arrays read-only):
   pitch       (L, W)          metres, origin at a corner
   fps         25
   blocks      [(half, lo, hi)] inclusive video-frame ranges that are graded
+  kickoffs    {half: frame}   start frame of each half's Smart Tagging "Kick Off (Start)" tag
 """
 
 import hashlib
 import inspect
 import os
-import re
 import sys
 
 import numpy as np
@@ -21,9 +21,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "starter"))
 import games  # noqa: E402
+import load_smart_tagging as st  # noqa: E402  (official loader; KICKOFF_CODE / KICKOFF_TYPE)
 from baseline import team_of_each_track  # noqa: E402  (official parser for slot -> team)
 
 N_SLOTS = 46
+_HALVES = {"1st Half": 1, "2nd Half": 2}   # the Half tag values st.load() returns (DATA.md: strings)
 FPS = 25
 _ARRAYS = ("px", "py", "ps", "team", "bx", "by")
 CACHE_VERSION = "v2-trk-1"   # bump by hand on any change the code hash below cannot see
@@ -44,63 +46,43 @@ def cache_stamp(pitch, n):
     return CACHE_VERSION + ":" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def _parse_half(tag):
-    if tag is None:
-        return None
-    if isinstance(tag, int):
-        return tag
-    s = str(tag).strip()
-    m = re.search(r"\d+", s)
-    if m:
-        return int(m.group(0))
-    words = {"first": 1, "second": 2, "third": 3, "fourth": 4}
-    for w, num in words.items():
-        if w in s.lower():
-            return num
-    return None
+def parse_kickoffs(events):
+    """{half: start_frame} of the "Kick Off (Start)" tags in the events st.load() returns.
 
-
-def parse_kickoffs(events, fps=FPS):
-    """Return {half_int: start_frame} from Smart Tagging events for 'Kick Off (Start)'."""
-    # lint-allow: smart_tagging pre-kickoff dead ball interval
-    try:
-        try:
-            import load_smart_tagging as st
-        except ImportError:
-            from starter import load_smart_tagging as st
-        kickoff_code = st.KICKOFF_CODE
-        kickoff_type = st.KICKOFF_TYPE
-    except Exception:
-        kickoff_code = "set pieces"
-        kickoff_type = "kick off (start)"
-
+    A tag matches the way st.check_time_base matches it: code and Type compared case-insensitively
+    against st.KICKOFF_CODE / st.KICKOFF_TYPE. The first tag of a half wins. A matching tag whose
+    Half is not one of _HALVES, or that has no start_frame, raises: the event is not in the format
+    the loader documents, and guessing would silently change the submission.
+    """
     kickoffs = {}
-    for ev in events or ():
-        code = (ev.get("code") or "").strip().lower()
-        tags = ev.get("tags") or {}
-        event_type = (tags.get("Type") or "").strip().lower()
-        if code == kickoff_code and event_type == kickoff_type:
-            half = _parse_half(tags.get("Half") or tags.get("half") or ev.get("half"))
-            start_frame = ev.get("start_frame")
-            if start_frame is None and "start_s" in ev:
-                start_frame = int(round(float(ev["start_s"]) * fps))
-            if half is not None and start_frame is not None and half not in kickoffs:
-                kickoffs[half] = int(start_frame)
+    for ev in events:
+        if (ev["code"] or "").strip().lower() != st.KICKOFF_CODE:
+            continue
+        if (ev["tags"].get("Type") or "").strip().lower() != st.KICKOFF_TYPE:
+            continue
+        half = ev["tags"].get("Half")
+        if half not in _HALVES:
+            raise ValueError("Smart Tagging kickoff tag at frame {} has Half {!r}; expected one of "
+                             "{}".format(ev.get("start_frame"), half, sorted(_HALVES)))
+        kickoffs.setdefault(_HALVES[half], int(ev["start_frame"]))
     return kickoffs
 
 
 def load_kickoffs(game=games.GAME, data_dir=None, fps=FPS):
-    """Return {half: start_frame} from Smart Tagging via starter/load_smart_tagging, or {}."""
-    # lint-allow: smart_tagging pre-kickoff dead ball interval
+    """{half: start_frame} of the Smart Tagging "Kick Off (Start)" tags.
+
+    Returns {} only when games.require reports the Smart Tagging file missing, after one warning
+    line on stderr so the absent pre-kickoff rule is visible. A file that is present but cannot be
+    read or parsed raises, because dropping the rule silently would change the submission.
+    """
     try:
-        try:
-            import load_smart_tagging as st
-        except ImportError:
-            from starter import load_smart_tagging as st
-        events = st.load(game=game, data_dir=data_dir, fps=fps)
-        return parse_kickoffs(events, fps=fps)
-    except Exception:
+        games.require(["smart_tagging"], game, data_dir)
+    except IOError:
+        path = games.asset_paths(game, data_dir)["smart_tagging"]
+        print("warning: Smart Tagging file not found ({}); pre-kickoff dead-ball rule not applied"
+              .format(path), file=sys.stderr)
         return {}
+    return parse_kickoffs(st.load(game=game, data_dir=data_dir, fps=fps))
 
 
 def build(px, py, ps, team, bx, by, pitch, blocks, kickoffs=None):
