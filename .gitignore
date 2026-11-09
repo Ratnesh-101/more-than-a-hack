@@ -92,3 +92,4 @@ service-account*.json
 *.feather
 *.h5
 *.partial.npz
+mtah/experiments/judge/out/*.json
