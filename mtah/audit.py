@@ -36,6 +36,9 @@ EXPECT = {
 }
 
 
+SPEED_LAG = 12   # frames each side for the position-derived speed in the unit check
+
+
 class Report:
     def __init__(self):
         self.rows, self.fails, self.warns = [], 0, 0
@@ -97,14 +100,15 @@ def audit_atd(r, data_dir, refresh):
     length, width = GAMES[GAME]["pitch"]
     bx, by = f["ball_x"][vis], f["ball_y"][vis]
     inside = np.mean((bx > -5) & (bx < length + 5) & (by > -5) & (by < width + 5))
-    r.check("ball within pitch +5 m", inside > 0.98, "{:.1%}".format(inside), "> 98%")
+    r.check("ball within pitch +5 m", inside > 0.95, "{:.1%}".format(inside),
+            "> 95% (swapped x/y puts ~35% outside)")
     out = float(np.nanmean(f["ball_out"][g & vis]))
     r.check("ball_out share (seen, graded)", out < 0.2, "{:.1%}".format(out), "< 20%",
             warn_only=True)
     dmin = np.fmin(f["d_home"], f["d_away"])[g & vis]
     med = float(np.nanmedian(dmin))
-    r.check("median ball->nearest player (m)", 0.2 < med < 5.0, "{:.2f}".format(med),
-            "0.2 .. 5 (metres, not 0-1 units)")
+    r.check("median ball->nearest player (m)", 0.1 < med < 10.0, "{:.2f}".format(med),
+            "0.1 .. 10 (metres; 0-1 units give < 0.1)")
     ms = float(np.nanmedian(f["mean_speed"][g]))
     r.check("median mean player speed (m/s)", 0.5 < ms < 5.0, "{:.2f}".format(ms),
             "0.5 .. 5", warn_only=True)
@@ -154,7 +158,11 @@ def audit_v2_tracking(r, data_dir):
     r.check("tracker speed present (of tracked)", with_speed > 0.5, "{:.1%}".format(with_speed),
             "> 50% (else dead ball runs on noisy derived speed)", warn_only=True)
 
-    lag, fps = 2, trk["fps"]
+    # +-12 frames (~0.5 s each side): tracker position jitter of sigma m/frame adds about
+    # sigma*sqrt(2)*fps/(2*lag) m/s of noise -- 1.8 m/s at lag 2 for sigma 0.2, 0.3 m/s at lag 12 --
+    # so a short lag could fail a correct m/s file. Curvature bias over 1 s is small, and km/h
+    # (3.6) or normalised units (~0.01) stay far outside the band either way.
+    lag, fps = SPEED_LAG, trk["fps"]
     der = np.full(ps.shape, np.nan, dtype=np.float32)
     der[lag:-lag] = np.hypot(px[2 * lag:] - px[:-2 * lag],
                              py[2 * lag:] - py[:-2 * lag]) * (fps / (2.0 * lag))
@@ -163,15 +171,24 @@ def audit_v2_tracking(r, data_dir):
         r.check("speed unit check (tracker vs positions)", False, "too few samples", "",
                 warn_only=True)
         return
-    med_ps, med_der = float(np.median(ps[both])), float(np.median(der[both]))
-    ratio = med_ps / med_der if med_der > 0 else float("inf")
+    med_ps = float(np.median(ps[both]))
+    # Ratio of 90th percentiles, not medians: jitter dominates at walking pace and drags a median
+    # ratio down (0.60 at sigma 0.3 m in a simulation), while p90 sits at running speeds where it
+    # does not (0.94-1.00 for m/s up to sigma 0.5 m; km/h stays 3.4-3.6).
+    q_ps, q_der = (float(np.percentile(a[both], 90)) for a in (ps, der))
+    ratio = q_ps / q_der if q_der > 0 else float("inf")
     r.check("median tracker speed (m/s)", 0.3 < med_ps < 4.0, "{:.2f}".format(med_ps),
             "0.3 .. 4 (football, m/s)")
-    r.check("tracker / position-derived speed", 0.7 < ratio < 1.4, "{:.2f}".format(ratio),
-            "~1.0 (3.6 = km/h)")
+    r.check("p90 tracker / p90 position-derived", 0.7 < ratio < 1.4, "{:.2f}".format(ratio),
+            "~1.0 (3.6 = km/h, ~0.01 = 0-1 units)")
     p99 = float(np.percentile(ps[both], 99))
     r.check("p99 tracker speed (m/s)", p99 < 12.0, "{:.1f}".format(p99),
             "< 12 (human sprint ~10.5)", warn_only=True)
+    try:                                   # the gate mtah.run itself applies (exit 1 on failure)
+        tracking.check_speed_unit(trk)
+        r.check("v2 check_speed_unit (run gate)", True, "pass")
+    except ValueError as err:
+        r.check("v2 check_speed_unit (run gate)", False, str(err)[:60] + "...")
 
 
 def audit_smart_tagging(r, data_dir):
