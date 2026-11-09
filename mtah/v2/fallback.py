@@ -22,7 +22,8 @@ VARIANTS = ("touch_only", "semi_markov")
 LETTERS = np.array(["H", "A", "D"])
 
 # switch_cost 30: after a contested touch the new team needs ~1.5 s of uninterrupted touching
-# (lead grows 1 nat/s) before possession flips; a deflection (flip + flip back) costs 60.
+# (lead grows 1 nat/s) before possession flips; this penalizes fleeting deflections, though
+# loose-ball evidence can still exceed the nominal 60-nat round trip.
 # dead_cost 20 > switch_cost / 2 so an H->A hand-over is never routed through a fake stoppage.
 SWITCH_COST = 30.0
 DEAD_COST = 20.0

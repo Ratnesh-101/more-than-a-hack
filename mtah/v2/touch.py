@@ -15,9 +15,9 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 K = 6            # frames (0.24 s) per side of the velocity line-fit: averages tracker jitter
 V_MAX = 40.0     # m/s: faster than the hardest shot (~35 m/s); a step beyond it is a tracking glitch
-DV_KICK = 5.0    # m/s (18 km/h) velocity change: a deliberate pass/trap/shot, not jitter or a brush
+DV_KICK = 5.0    # m/s (18 km/h) velocity change: intended kick threshold, assuming ball position noise <= ~0.3 m (unverified)
 R_KICK = 2.0     # m: leg reach (~1 m) from a body-centre track plus ~1 m position error
-R_CTRL = 1.5     # m: close control while dribbling; the ball is rarely > 1.5 m from the carrier
+R_CTRL = 1.5     # m: close-control heuristic; unverified against real dribbling
 MARGIN = 0.5     # m: two teams this close to equally near = a contested touch, not control
 HOLD = 12        # frames each side (1 s total): "control" = keeping the ball, not passing by it
 TAU = 1.0        # s: one second of touch-time lead = 1 nat of evidence for that team

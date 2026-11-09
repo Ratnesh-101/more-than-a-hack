@@ -9,9 +9,9 @@ import numpy as np
 
 from mtah.v2 import deadball, touch
 
-SWITCH_COST = 30.0    # ~1.5 s of new-team touching flips possession; a deflection (flip + back) costs 60
+SWITCH_COST = 30.0    # ~1.5 s of new-team touching flips; penalizes deflections, though loose-ball evidence can still exceed 60 nats
 DEAD_COST = 12.0      # v1's live <-> dead penalty, untouched
-MIN_DEAD_S = 3.0      # fastest real restarts (quick throw-in / free kick) take about 3 s
+MIN_DEAD_S = 3.0      # regularization floor to prevent brief D flickers from splitting possessions; real quick restarts can be shorter
 EPS = 1e-6            # keeps log-probabilities finite
 LETTERS = np.array(["H", "A", "D"])
 

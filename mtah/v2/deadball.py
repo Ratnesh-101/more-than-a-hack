@@ -1,7 +1,8 @@
 """Multi-cue dead-ball detection (cand_08): a logit that sums football cues of a stoppage.
 
   - players walking: ROBUST statistics over known-team slots (fraction below walking pace, count
-    of high-speed runners), smoothed over 1 s, so one ghost slot or one sprinter cannot flip it;
+    of high-speed runners), smoothed over 1 s to absorb brief spikes, though one sustained sprinter
+    flips walking-only to live;
   - ball stationary, ball beyond the lines, still ball on a restart spot (corner arc, touchline,
     goal area, centre spot) -- each must PERSIST for most of 2 s of ball sightings, because a
     lofted ball projects beyond the lines and a shielded ball pauses briefly in live play;
@@ -16,7 +17,7 @@ import numpy as np
 OUT_MARGIN_M = 0.5    # ball-tracking error near a line; same margin as v1
 WALK_MPS = 2.0        # walking pace tops out near 2 m/s (7 km/h); above it a player is jogging
 HSR_MPS = 5.5         # high-speed-running threshold of football physical reports (19.8 km/h)
-SLOW_FRAC = 0.9       # stoppage = at most ~2 of 20 outfielders above walking pace (restarter, a runner)
+SLOW_FRAC = 0.9       # stoppage cue: ~90% walking across all tracked team slots (includes goalkeepers and duplicate tracks)
 SLOW_WIDTH = 0.03     # about one player of softness around that count
 SMOOTH_S = 1.0        # player cues averaged over 1 s: a stoppage is a state, not a frame
 SPEED_LAG = 2         # frames each side for a position-derived speed where the tracker gives none
@@ -36,8 +37,8 @@ W_SLOW = 3.0          # nearly everyone walking (v1's dead_slow_bonus, now on a 
 W_HSR = -2.0          # per high-speed runner (capped at 2): sprinting means live play
 W_STILL = 1.5         # ball motionless for 2 s: rare but possible live (keeper holding it)
 W_OUT = 5.0           # ball beyond the lines (v1's dead_out_bonus)
-W_SPOT = 2.0          # still ball on a restart spot: the set piece is being prepared
-W_KICKOFF = 3.0       # teams split exactly by the halfway line happens only at a kickoff
+W_SPOT = 2.0          # still ball on a boundary restart spot (corner, touchline, goal area, centre); omits free kicks and penalties
+W_KICKOFF = 3.0       # teams separated across halfway: targets kickoffs, but can fire on a deep block when the ball is untracked
 W_PASS = -2.0         # ball moving at pass speed inside the pitch: play is live
 
 

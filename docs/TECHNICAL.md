@@ -23,11 +23,11 @@ Why: `spellF1` scores whole possessions matched by IoU (EVALUATION.md). Per-fram
 | A team takes over only on a kick or a carry | `touch.py:_touches` (`kick`: `dv > DV_KICK` at a player within `R_KICK`; `held_h`/`held_a`: within `R_CTRL` for `HOLD`) | A pass flying past a defender is not a touch (ball velocity unchanged); a deflection or won aerial is not control. |
 | Contested touch is credited to both teams | `touch.py:_touches` (`reach_h`/`reach_a` use `MARGIN`; `held_*` require a clear `MARGIN` advantage) | A duel gives neither team control; both timers reset, `r` stays near zero. |
 | Hand-over inside a hidden-ball gap is placed at the gap midpoint | `touch.py:_backdate` | If the ball reappears at the other team's feet, it changed hands somewhere in the gap; with no evidence of when, the midpoint minimises expected boundary error. |
-| Dead ball from the share of players walking | `deadball.py:dead_logit` (`frac_walk`, `slow`, `W_SLOW`, `W_HSR`) | In a stoppage almost everyone walks; a share is robust to one restarter or a ghost slot, where a mean speed is not. |
+| Dead ball from the share of players walking | `deadball.py:dead_logit` (`frac_walk`, `slow`, `W_SLOW`, `W_HSR`) | In a stoppage almost everyone walks; 1 s smoothing absorbs brief tracking spikes, though one sustained sprinter will veto walking-only dead ball. |
 | Dead ball: ball outside the lines | `deadball.py:dead_logit` (`out`, `W_OUT`, persisted 2 s) | Ball over a line is out of play; persistence because a lofted ball projects beyond the lines. |
-| Dead ball: still ball on a restart spot | `deadball.py:dead_logit` (`still`, `spot`, `W_STILL`, `W_SPOT`) | Corner arc, touchline, goal area and centre spot are where restarts are taken. |
-| Dead ball: kickoff geometry | `deadball.py:dead_logit` (`kickoff`, `W_KICKOFF`) | Both teams entirely in their own halves happens only at a kickoff; works with the ball missing. |
-| Minimum stoppage 3 s | `decode.py:_viterbi_min_dead` (`k = MIN_DEAD_S * fps`; the first frame of a half is exempt) | Fastest real restarts take about 3 s; a shorter D is an artefact that would split a possession. |
+| Dead ball: still ball on a restart spot | `deadball.py:dead_logit` (`still`, `spot`, `W_STILL`, `W_SPOT`) | Corner arc, touchline, goal area and centre spot cover boundary restarts and kickoffs, but omit free kicks (Law 13) and penalties (Law 14). |
+| Dead ball: kickoff geometry | `deadball.py:dead_logit` (`kickoff`, `W_KICKOFF`) | Teams separated by the halfway line reflects kickoff rules (Law 8), but can also trigger during live play in a deep block if the ball is untracked (the ball is untracked on 40.7% of graded frames). |
+| Minimum stoppage 3 s | `decode.py:_viterbi_min_dead` (`k = MIN_DEAD_S * fps`; the first frame of a half is exempt) | Regularization floor to prevent brief artifactual D flickers from splitting possessions; the fastest restarts can be shorter and the ground-truth onset convention for a stoppage is unmeasured. |
 | No ownership inferred for dead ball | `decode.py:emissions` (D emission is `log p`, no team term) | D is its own label; the team log-odds `r` is not reset by D, so the last toucher is the default after a stoppage. There is no restart-team rule. |
 | No `X` inside graded halves | `decode.py:decode` fills `X` everywhere, then overwrites every frame of each block from `_viterbi_min_dead`, which returns states 0, 1, 2 only | Verified by reading the code; confirm on the real CSV (Claims to verify). |
 
@@ -39,9 +39,9 @@ Every constant in `touch.py`, `deadball.py`, `decode.py`. "Reason" is what the b
 |---|---|---|---|
 | `touch.K` | 6 frames | velocity line-fit half-window (0.24 s) | averages tracker jitter but keeps touches apart |
 | `touch.V_MAX` | 40 m/s | steps faster are glitches | above hardest shot (~35 m/s) |
-| `touch.DV_KICK` | 5 m/s | velocity change that counts as a kick | deliberate pass/trap/shot exceeds 18 km/h; jitter and brushes do not. Assumes small real ball jitter, unverified |
+| `touch.DV_KICK` | 5 m/s | velocity change that counts as a kick | heuristic threshold for deliberate passes, traps and shots (18 km/h); separates kicks from noise only if real ball position error is within ~0.3 m, which is unverified |
 | `touch.R_KICK` | 2.0 m | reach for a kick | leg ~1 m plus ~1 m position error |
-| `touch.R_CTRL` | 1.5 m | carry distance | ball rarely farther than 1.5 m from a dribbler |
+| `touch.R_CTRL` | 1.5 m | carry distance | heuristic proximity threshold for close dribbling; unsupported by empirical dribbling measurements and unverified |
 | `touch.MARGIN` | 0.5 m | team-distance margin for contested touch | both this close = duel, not control. Brief 03 cites synthetic carry offset 0.7 m (flat 1.2-2 m) for a related radius |
 | `touch.HOLD` | 12 frames each side (1 s) | carry must persist | "keeping the ball, not passing by it". No sensitivity run recorded; whether it was set after viewing dev seeds is not recorded - ask lead |
 | `touch.TAU` | 1.0 s | seconds of touch lead per nat | 1 s lead = 1 nat. Synthetic: TAU 2 s gives 0.598 vs 0.597 (cand 02 alone) |
@@ -50,7 +50,7 @@ Every constant in `touch.py`, `deadball.py`, `decode.py`. "Reason" is what the b
 | `deadball.OUT_MARGIN_M` | 0.5 m | ball-out margin | ball-tracking error near a line; same as v1 |
 | `deadball.WALK_MPS` | 2.0 m/s | walking pace ceiling | top of walking (~7 km/h). **dev**: sits just above the synthetic dead-walk speed 1.6 m/s; synthetic 1.8 gives -0.020 spellF1, 1.5 gives -0.07, 2.5 gives -0.009. A cliff |
 | `deadball.HSR_MPS` | 5.5 m/s | high-speed-running threshold | standard in football physical reports (19.8 km/h). **dev**: equals the synthetic chaser speed; 5.0 and 6.0 are flat |
-| `deadball.SLOW_FRAC` / `SLOW_WIDTH` | 0.9 / 0.03 | walking share that signals a stoppage; softness | at most ~2 of 20 outfielders above walking pace; ~1 player of softness. Synthetic 0.85/0.95 gives -0.018/-0.013 |
+| `deadball.SLOW_FRAC` / `SLOW_WIDTH` | 0.9 / 0.03 | walking share that signals a stoppage; softness | targets ~90% walking across all tracked known-team slots (mean ~20.5 tracked per graded frame, which includes goalkeepers and duplicate tracks, so not strictly 20 outfielders); ~1 player of softness. Synthetic 0.85/0.95 gives -0.018/-0.013 |
 | `deadball.SMOOTH_S` | 1.0 s | player cues averaged | a stoppage is a state, not a frame |
 | `deadball.SPEED_LAG` | 2 frames | half-window of position-derived speed | 0.16 s central difference, near the tracker speed it replaces; used only where the ATD speed (documented m/s) is NaN. Noise ~1.4 x position error / 0.16 s; check and fallback in DECISIONS.md |
 | `deadball.BALL_WIN_S` | 1.0 s | ball displacement window | long enough to ignore jitter |
@@ -64,9 +64,9 @@ Every constant in `touch.py`, `deadball.py`, `decode.py`. "Reason" is what the b
 | `deadball.W_SLOW` / `W_OUT` | 3.0 / 5.0 | cue weights (nats) | with the bias: walking alone gives +0.5 (leans dead, vetoed by one sustained sprinter or a pass-speed ball); ball out alone gives +2.5 and decides (Law 9). See DECISIONS.md |
 | `deadball.W_HSR` | -2.0 per runner, cap 2 | sprinting means live | sprinting >19.8 km/h for 1 s (smoothed) means live: one runner turns walking-alone to -1.5, two turn ball-out to -1.5; the cap limits ghost-slot damage. See DECISIONS.md |
 | `deadball.W_STILL`, `W_SPOT`, `W_KICKOFF`, `W_PASS` | 1.5, 2.0, 3.0, -2.0 | other cue weights | "moderate cues that cannot outvote the player cue alone". Synthetic: the four ball cues together add +0.003 spellF1, i.e. noise; the kickoff cue never fires on synthetic data |
-| `decode.SWITCH_COST` | 30 | H<->A penalty (nats) | ~1.5 s of new-team touching flips; a deflection (flip and back) costs 60. Synthetic plateau: 20/45 gives 0.598/0.593 (cand 02 alone) |
+| `decode.SWITCH_COST` | 30 | H<->A penalty (nats) | ~1.5 s of new-team touching flips under continuous contact; intended to penalize fleeting deflections, though evidence during loose balls can still exceed the nominal 60-nat round trip. Synthetic plateau: 20/45 gives 0.598/0.593 (cand 02 alone) |
 | `decode.DEAD_COST` | 12 | live<->dead penalty | round trip 24 < 30 is intended: restarts often change team (Laws 13, 15-17); the 3 s floor makes a cue-less fake D cost >130 nats. Synthetic 12/30: 0.592/0.595. See DECISIONS.md |
-| `decode.MIN_DEAD_S` | 3.0 s | minimum stoppage | fastest real restarts (quick throw-in, free kick). Synthetic: 5 s scored higher (0.537 vs 0.530); 3 s kept on football grounds |
+| `decode.MIN_DEAD_S` | 3.0 s | minimum stoppage | regularization floor against artifactual splits; quick restarts can be faster and the stoppage onset convention is unmeasured. Synthetic: 5 s scored higher (0.537 vs 0.530); 3 s kept on football grounds |
 | `decode.EPS` | 1e-6 | probability clip | keeps log-probabilities finite |
 
 ## 4. Assets and training data
