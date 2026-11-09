@@ -12,6 +12,7 @@ A Trk is a plain dict (arrays read-only):
 import hashlib
 import inspect
 import os
+import re
 import sys
 
 import numpy as np
@@ -43,7 +44,66 @@ def cache_stamp(pitch, n):
     return CACHE_VERSION + ":" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def build(px, py, ps, team, bx, by, pitch, blocks):
+def _parse_half(tag):
+    if tag is None:
+        return None
+    if isinstance(tag, int):
+        return tag
+    s = str(tag).strip()
+    m = re.search(r"\d+", s)
+    if m:
+        return int(m.group(0))
+    words = {"first": 1, "second": 2, "third": 3, "fourth": 4}
+    for w, num in words.items():
+        if w in s.lower():
+            return num
+    return None
+
+
+def parse_kickoffs(events, fps=FPS):
+    """Return {half_int: start_frame} from Smart Tagging events for 'Kick Off (Start)'."""
+    # lint-allow: smart_tagging pre-kickoff dead ball interval
+    try:
+        try:
+            import load_smart_tagging as st
+        except ImportError:
+            from starter import load_smart_tagging as st
+        kickoff_code = st.KICKOFF_CODE
+        kickoff_type = st.KICKOFF_TYPE
+    except Exception:
+        kickoff_code = "set pieces"
+        kickoff_type = "kick off (start)"
+
+    kickoffs = {}
+    for ev in events or ():
+        code = (ev.get("code") or "").strip().lower()
+        tags = ev.get("tags") or {}
+        event_type = (tags.get("Type") or "").strip().lower()
+        if code == kickoff_code and event_type == kickoff_type:
+            half = _parse_half(tags.get("Half") or tags.get("half") or ev.get("half"))
+            start_frame = ev.get("start_frame")
+            if start_frame is None and "start_s" in ev:
+                start_frame = int(round(float(ev["start_s"]) * fps))
+            if half is not None and start_frame is not None and half not in kickoffs:
+                kickoffs[half] = int(start_frame)
+    return kickoffs
+
+
+def load_kickoffs(game=games.GAME, data_dir=None, fps=FPS):
+    """Return {half: start_frame} from Smart Tagging via starter/load_smart_tagging, or {}."""
+    # lint-allow: smart_tagging pre-kickoff dead ball interval
+    try:
+        try:
+            import load_smart_tagging as st
+        except ImportError:
+            from starter import load_smart_tagging as st
+        events = st.load(game=game, data_dir=data_dir, fps=fps)
+        return parse_kickoffs(events, fps=fps)
+    except Exception:
+        return {}
+
+
+def build(px, py, ps, team, bx, by, pitch, blocks, kickoffs=None):
     """Validate shapes and dtypes, freeze the arrays, return the Trk dict."""
     px, py, ps, bx, by = (np.ascontiguousarray(a, dtype=np.float32) for a in (px, py, ps, bx, by))
     team = np.ascontiguousarray(team, dtype=np.int8)
@@ -53,7 +113,8 @@ def build(px, py, ps, team, bx, by, pitch, blocks):
             px.shape, ps.shape, team.shape, bx.shape))
     trk = {"px": px, "py": py, "ps": ps, "team": team, "bx": bx, "by": by,
            "pitch": (float(pitch[0]), float(pitch[1])), "fps": FPS,
-           "blocks": [(int(h), int(lo), int(hi)) for h, lo, hi in blocks]}
+           "blocks": [(int(h), int(lo), int(hi)) for h, lo, hi in blocks],
+           "kickoffs": dict(kickoffs) if kickoffs is not None else {}}
     for k in _ARRAYS:
         trk[k].flags.writeable = False
     return trk
@@ -138,7 +199,8 @@ def from_atd(data_dir=None, game=games.GAME, refresh=False):
     if os.path.isfile(cache) and not refresh:
         z = np.load(cache)
         if "stamp" in z.files and str(z["stamp"]) == stamp:
-            return build(*(z[k] for k in _ARRAYS), pitch, blocks)
+            kickoffs = load_kickoffs(game=game, data_dir=data_dir, fps=FPS)
+            return build(*(z[k] for k in _ARRAYS), pitch, blocks, kickoffs=kickoffs)
         # missing or different stamp: stale cache, fall through and recompute from the raw ATD
     try:
         meta_path, raw_path = games.require(["atd_meta", "atd_raw"], game, data_dir)
@@ -147,4 +209,5 @@ def from_atd(data_dir=None, game=games.GAME, refresh=False):
     arrays = _stream(meta_path, raw_path, n, pitch)
     os.makedirs(os.path.dirname(cache), exist_ok=True)
     np.savez_compressed(cache, stamp=np.array(stamp), **dict(zip(_ARRAYS, arrays)))
-    return build(*arrays, pitch, blocks)
+    kickoffs = load_kickoffs(game=game, data_dir=data_dir, fps=FPS)
+    return build(*arrays, pitch, blocks, kickoffs=kickoffs)

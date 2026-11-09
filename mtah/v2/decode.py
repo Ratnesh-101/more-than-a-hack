@@ -71,10 +71,38 @@ def _viterbi_min_dead(e, k, sw, dc):
     return path
 
 
+def kickoff_frame(trk, half):
+    """Start frame of half's Kick Off (Start) tag if present in trk, else None."""
+    if isinstance(trk, dict):
+        ko = trk.get("kickoffs")
+        if ko and half in ko:
+            return ko[half]
+        if "smart_tagging" in trk and trk["smart_tagging"]:
+            from mtah.v2 import tracking
+            ko = tracking.parse_kickoffs(trk["smart_tagging"], fps=trk.get("fps", 25))
+            if ko and half in ko:
+                return ko[half]
+    return None
+
+
+def decode_half(trk, half, lo, hi, decode_segment):
+    """Labels for one graded half [lo, hi]: D before that half's kickoff, decoded after."""
+    kick = kickoff_frame(trk, half)
+    start = max(lo, kick) if kick is not None else lo
+    labels = np.empty(hi - lo + 1, dtype="<U1")
+    if start > lo:
+        labels[:start - lo] = "D"
+    if start <= hi:
+        labels[start - lo:] = decode_segment(start, hi)
+    return labels
+
+
 def decode(trk, e):
     """H/A/D inside each graded half with the minimum-stoppage decoder, X outside."""
     labels = np.full(len(e), "X", dtype="<U1")
     k = int(round(MIN_DEAD_S * trk["fps"]))
-    for _, lo, hi in trk["blocks"]:
-        labels[lo:hi + 1] = LETTERS[_viterbi_min_dead(e[lo:hi + 1], k, SWITCH_COST, DEAD_COST)]
+    for half, lo, hi in trk["blocks"]:
+        labels[lo:hi + 1] = decode_half(
+            trk, half, lo, hi,
+            lambda s, h: LETTERS[_viterbi_min_dead(e[s:h + 1], k, SWITCH_COST, DEAD_COST)])
     return labels

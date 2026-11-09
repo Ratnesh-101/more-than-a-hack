@@ -16,6 +16,7 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
 from mtah.v2 import touch
+from mtah.v2.decode import decode_half
 from mtah.v2.touch import CLIP, DV_KICK, HOLD, K, MARGIN, R_CTRL, R_KICK, TAU, V_MAX
 
 VARIANTS = ("touch_only", "semi_markov")
@@ -221,8 +222,10 @@ def _viterbi(e, sw, dc, kmin):
 
 def _decode_viterbi(trk, e):
     labels = np.full(len(e), "X", dtype="<U1")
-    for _, lo, hi in trk["blocks"]:
-        labels[lo:hi + 1] = LETTERS[_viterbi(e[lo:hi + 1], SWITCH_COST, DEAD_COST, MIN_DEAD_FRAMES)]
+    for half, lo, hi in trk["blocks"]:
+        labels[lo:hi + 1] = decode_half(
+            trk, half, lo, hi,
+            lambda s, h: LETTERS[_viterbi(e[s:h + 1], SWITCH_COST, DEAD_COST, MIN_DEAD_FRAMES)])
     return labels
 
 
@@ -316,8 +319,10 @@ def _semi_markov_block(e, fps):
 
 def _decode_semi_markov(trk, e):
     labels = np.full(len(e), "X", dtype="<U1")
-    for _, lo, hi in trk["blocks"]:
-        labels[lo:hi + 1] = _semi_markov_block(e[lo:hi + 1], trk["fps"])
+    for half, lo, hi in trk["blocks"]:
+        labels[lo:hi + 1] = decode_half(
+            trk, half, lo, hi,
+            lambda s, h: _semi_markov_block(e[s:h + 1], trk["fps"]))
     return labels
 
 
