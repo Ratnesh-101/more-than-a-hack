@@ -78,6 +78,11 @@ def main():
         ap.error(str(err))
 
     trk = tracking.from_atd(data_dir=args.data_dir, refresh=args.refresh)
+    try:
+        tracking.check_speed_unit(trk)
+    except ValueError as err:
+        print("error:", err, file=sys.stderr)
+        sys.exit(1)
     if args.variant == "champion":
         labels = decode.decode(trk, decode.emissions(trk))
     else:
