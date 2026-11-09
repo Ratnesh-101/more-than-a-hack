@@ -59,6 +59,37 @@ def build(px, py, ps, team, bx, by, pitch, blocks):
     return trk
 
 
+SPEED_MIN_SLOTS = 10         # a frame counts for the unit check when this many slots are tracked
+SPEED_MEDIAN_MIN = 0.3       # m/s; below it the field looks pitch-normalised
+SPEED_P95_RANGE = (2.0, 15.0)   # m/s; above the top it looks like km/h, below the bottom normalised
+
+
+def check_speed_unit(trk):
+    """Raise ValueError unless the player speed field looks like m/s.
+
+    Over frames with at least SPEED_MIN_SLOTS tracked slots, the median and 95th percentile of the
+    non-NaN ps must satisfy median >= 0.3 and 2.0 <= p95 <= 15 (m/s expected: median about 0.5-3,
+    p95 about 4-9). All-NaN speeds do not raise (the position-derived fallback handles them); a
+    one-line notice is printed instead. Never modifies trk.
+    """
+    tracked = (~np.isnan(trk["px"])).sum(axis=1) >= SPEED_MIN_SLOTS
+    v = trk["ps"][tracked]
+    v = v[~np.isnan(v)]
+    if not len(v):
+        print("speed check: no speed values (all NaN); skipping unit check, "
+              "position-derived fallback applies")
+        return
+    med, p95 = float(np.median(v)), float(np.percentile(v, 95))
+    lo, hi = SPEED_P95_RANGE
+    if med < SPEED_MEDIAN_MIN or p95 > hi or p95 < lo:
+        raise ValueError(
+            "player speed field failed the m/s sanity check: over {:,} values on frames with >= {} "
+            "tracked slots the median is {:.3g} and the 95th percentile {:.3g}; expected m/s with "
+            "median >= {} and p95 between {} and {} (typically median 0.5-3, p95 4-9). The speed "
+            "field is not m/s; re-derive from positions or fix the unit; the champion's dead-ball "
+            "cue depends on it.".format(len(v), SPEED_MIN_SLOTS, med, p95, SPEED_MEDIAN_MIN, lo, hi))
+
+
 def _group(text):
     """'x,y[,speed]' -> (x, y, speed); the speed is NaN when absent or 'NaN'."""
     v = text.split(",")
