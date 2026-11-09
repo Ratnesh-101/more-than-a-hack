@@ -164,8 +164,10 @@ python -m analysis.preflight --team nirakshak
 - The pipeline has no randomness: the same data gives a byte-identical CSV (`mtah.v2.run` prints
   its SHA-256). Golden test: `python -m mtah.v2.tests.test_golden` (synthetic data, no download).
 - `analysis.preflight` is the final pre-upload checklist (CSV, SHA-256, PDF, markers, repo hygiene).
-  Tests, with no match data: `python -m mtah.v2.tests.test_golden`, `test_fallback`, `test_e2e` (same
-  package) and `python -m pytest tests`.
+  Tests, with no match data: `python -m mtah.v2.tests.test_golden`, `test_fallback`, `test_e2e`,
+  `test_robust` (about 1 min, 32 edge-case ATD cases), `test_speed_guard` (same package) and
+  `python -m pytest tests`. `tracking.check_speed_unit` aborts every variant if the speed field does
+  not look like m/s; `real_checks` gates are the lead's guesses, to be re-read against real numbers.
 - Optional: `pip install -r requirements-analysis.txt`, then
   `python -m analysis.diagnostics --check-alignment`, which compares letters with the public
   5-minute ground truth to confirm frame indexing only. It is not used to tune anything.
