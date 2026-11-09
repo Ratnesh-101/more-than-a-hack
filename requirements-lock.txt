@@ -1,0 +1,7 @@
+# Direct dependencies of the nirakshak pipeline, pinned (cross-platform, Python 3.11).
+# Full Windows environment snapshot: requirements-freeze-windows.txt
+numpy==1.24.4
+pandas==2.0.3
+kloppy==3.18.0
+matplotlib==3.10.9
+pytest==9.2.0
