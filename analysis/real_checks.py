@@ -14,7 +14,7 @@ Status: PASS / FAIL for the VERDICT gates, WARN for the heuristic sanity thresho
 A compact JSON of all rows is written to analysis/out/<csv name>_real_checks.json (git-ignored).
 
 --synthetic-demo SEED is a test hook: it swaps the real tracking for the synthetic Trk
-mtah.experiments.court.synth.make(SEED), so the script can run without the match data.
+mtah.experiments.court.synth.make(SEED) (imported lazily), so the script can run without the match data.
 """
 
 import argparse
@@ -28,7 +28,7 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from analysis.unlabeled_stats import valley  # noqa: E402
-from mtah.experiments.court import synth, trk as trk_mod  # noqa: E402
+from mtah.v2 import tracking  # noqa: E402  (the stamped cache the submission itself uses)
 
 WALK_MPS = 2.0          # a slot walks below this speed (WALK_MPS of cand_08)
 WALK_SHARE = 0.9        # a frame is "all walking" when this share of known-team slots walks
@@ -247,14 +247,15 @@ def main():
         ap.error("--compare-is-v1 needs --compare")
 
     if args.synthetic_demo is not None:
+        from mtah.experiments.court import synth  # noqa: E402  (test hook only)
         trk = synth.make(args.synthetic_demo)[0]
     else:
         try:
-            trk = trk_mod.from_atd()
+            trk = tracking.from_atd()
         except OSError as err:
             sys.exit("real_checks: match tracking not found ({}). Unpack the bundle into data/ or set "
                      "MTAH_DATA_DIR (see README.md, 'Reproduce').".format(" ".join(str(err).split())))
-    n, fps, blocks = trk_mod.n_frames(trk), trk["fps"], trk["blocks"]
+    n, fps, blocks = len(trk["bx"]), trk["fps"], trk["blocks"]
     try:
         labels = read_labels(args.csv, n)
         other = read_labels(args.compare, n) if args.compare else None
