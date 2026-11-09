@@ -67,6 +67,7 @@ def rle(seg):
 def shape(labels, blocks, fps):
     """Possession and D statistics of a label array inside `blocks` [(half, lo, hi)]."""
     dur, switches, d_runs, d_start, x_frames, n_frames = [], 0, [], 0.0, 0, 0
+    kick = ""
     for _, lo, hi in blocks:
         letters, lengths = rle(labels[lo:hi + 1])
         live = np.isin(letters, ("H", "A"))
@@ -74,6 +75,7 @@ def shape(labels, blocks, fps):
         switches += int(np.sum(live[1:] & live[:-1]))
         d_runs += list(lengths[letters == "D"] / float(fps))
         d_start = max(d_start, lengths[0] / float(fps) if letters[0] == "D" else 0.0)
+        kick = kick or "".join(letters[letters != "D"][:1])
         x_frames += int(lengths[letters == "X"].sum())
         n_frames += hi - lo + 1
     dur = np.array(dur)
@@ -83,7 +85,7 @@ def shape(labels, blocks, fps):
             "max_s": float(dur.max()) if len(dur) else 0.0,
             "flicker": switches / (n_frames / float(fps) / 60.0),
             "d_share": d_frames / float(n_frames), "d_longest_s": max(d_runs, default=0.0),
-            "d_start_s": d_start, "x": x_frames}
+            "d_start_s": d_start, "kick": kick, "x": x_frames}
 
 
 def speeds(trk):
@@ -141,7 +143,16 @@ def acceptance(tab, scope, st, other, v1):
     tab.gate(scope, "flicker H<->A /min", st["flicker"], 0.5, 3, "{:.2f}")
     tab.info(scope, "D share", "{:.3f}".format(st["d_share"]))
     tab.info(scope, "longest D run s", "{:.1f}".format(st["d_longest_s"]))
-    tab.gate(scope, "D run at half start s", st["d_start_s"], None, 60, "{:.1f}")
+    if scope == "half 1":   # graded from the kickoff itself
+        tab.gate(scope, "D run at half start s", st["d_start_s"], None, 60, "{:.1f}")
+    else:
+        tab.info(scope, "D run at half start s", "{:.1f}".format(st["d_start_s"]))
+    if scope == "half 2":
+        tab.rows.append(("INFO", scope, "head-of-half note", "", "pre-kickoff head of half 2 is expected "
+                         "to be dead per FAQ.md (~117 s); this is a consistency check, never a rule: "
+                         "nothing in the pipeline may hard-code it"))
+    if scope != "all":
+        tab.info(scope, "first live label after head D (kickoff team)", st["kick"] or "none")
     tab.gate(scope, "X frames", st["x"], 0, 0, "{:.0f}")
 
 
