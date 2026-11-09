@@ -39,6 +39,11 @@ VALLEY_BIN = 0.05       # histogram bin width for the walking-share valley (shar
 JITTER_WARN = 0.05      # WARN above this share of ball steps over 1 m
 MISSING_WARN = 0.5      # WARN above this share of D-labelled frames without a ball
 MIN_WALK_FRAC = 0.01    # FAIL when fewer frames than this reach the walking share
+KICK_RUN = 13           # consecutive visible-ball frames the kick detection needs (touch K)
+RUN_WARN, RUN_FAIL = 0.6, 0.3   # lead guesses for the share of visible frames in runs >= KICK_RUN
+PS_SLOTS = 10           # frames with at least this many tracked slots enter the speed-unit check
+PS_MEDIAN_MIN, PS_P95_MIN, PS_P95_MAX = 0.3, 2.0, 15.0   # m/s bounds (expected median 0.5-3, p95 4-9)
+ONE_TEAM_WARN = 0.8     # WARN when one team holds more than this share of a half's live frames
 
 
 def read_labels(path, n):
@@ -183,6 +188,53 @@ def tracking_checks(tab, trk, labels):
         tab.warn("ball", "ball missing in D frames", miss, miss > MISSING_WARN, "<= {:g}".format(MISSING_WARN))
 
 
+def visibility_checks(tab, trk):
+    """Ball visibility per graded half: run lengths, share of visible frames in runs >= KICK_RUN."""
+    for half, lo, hi in trk["blocks"]:
+        scope = "half {}".format(half)
+        vis = np.isfinite(trk["bx"][lo:hi + 1])
+        letters, lengths = rle(np.where(vis, "V", "M"))
+        on, off = lengths[letters == "V"], lengths[letters == "M"]
+        if not len(on):
+            tab.rows.append(("FAIL", scope, "ball visible frames", "0", "> 0"))
+            continue
+        tab.info(scope, "visible run frames p5/25/50/75/95", " / ".join(
+            "{:.0f}".format(v) for v in np.percentile(on, (5, 25, 50, 75, 95))))
+        share = float(on[on >= KICK_RUN].sum()) / on.sum()
+        tab.rows.append(("FAIL" if share < RUN_FAIL else "WARN" if share < RUN_WARN else "PASS", scope,
+                         "visible frames in runs >= {}".format(KICK_RUN), "{:.3f}".format(share),
+                         "warn < {:g}, fail < {:g} (lead guesses)".format(RUN_WARN, RUN_FAIL)))
+        tab.info(scope, "longest ball-missing run s",
+                 "{:.1f}".format(off.max() / float(trk["fps"]) if len(off) else 0.0))
+
+
+def speed_unit_check(tab, trk):
+    """Median and p95 of the tracker's own ps on frames with enough tracked slots (unit sanity)."""
+    ps = trk["ps"][np.isfinite(trk["px"]).sum(axis=1) >= PS_SLOTS]
+    ps = ps[np.isfinite(ps)]
+    if not len(ps):
+        tab.info("tracking", "ps speed unit", "ps all NaN, skipped")
+        return
+    med, p95 = np.percentile(ps, (50, 95))
+    ok = med >= PS_MEDIAN_MIN and PS_P95_MIN <= p95 <= PS_P95_MAX
+    tab.rows.append(("PASS" if ok else "FAIL", "tracking", "ps median / p95 m/s",
+                     "{:.2f} / {:.2f}".format(med, p95),
+                     "median >= {:g}, p95 {:g}..{:g}".format(PS_MEDIAN_MIN, PS_P95_MIN, PS_P95_MAX)))
+
+
+def team_balance(tab, labels, blocks, fps):
+    """Longest single-team run and the larger team's share of live frames, per half."""
+    for half, lo, hi in blocks:
+        letters, lengths = rle(labels[lo:hi + 1])
+        h, a = (int(lengths[letters == t].sum()) for t in "HA")
+        scope = "half {}".format(half)
+        longest = max([0.0] + [l / float(fps) for t, l in zip(letters, lengths) if t in "HA"])
+        tab.info(scope, "longest single-team run s", "{:.1f}".format(longest))
+        top = max(h, a) / float(max(h + a, 1))
+        tab.warn(scope, "larger team share of live frames", top, top > ONE_TEAM_WARN,
+                 "<= {:g}".format(ONE_TEAM_WARN))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Unlabeled real-data acceptance gate for a possession CSV.")
     ap.add_argument("--csv", required=True, help="submission frame,label CSV to check")
@@ -215,6 +267,9 @@ def main():
         acceptance(tab, scope, shape(labels, bl, fps), None if other is None else shape(other, bl, fps),
                    args.compare_is_v1)
     tracking_checks(tab, trk, labels)
+    visibility_checks(tab, trk)
+    speed_unit_check(tab, trk)
+    team_balance(tab, labels, blocks, fps)
 
     tab.print()
     out = os.path.join(ROOT, "analysis", "out")
