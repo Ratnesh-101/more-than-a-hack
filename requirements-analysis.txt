@@ -1,0 +1,4 @@
+# Optional. Only for analysis/diagnostics.py (plots). Nothing here is needed to produce a submission.
+-r requirements.txt
+
+matplotlib==3.7.5
