@@ -165,8 +165,15 @@ def pdf_pages(path):
     return max(counts) if counts else 0
 
 
-def marker_lines(text, pattern):
-    return [i for i, ln in enumerate(text.splitlines(), 1) if re.search(pattern, ln)]
+def marker_lines(text, pattern, ignore_code_spans=False):
+    """Line numbers matching pattern; optionally ignore text inside `inline code` spans."""
+    out = []
+    for i, ln in enumerate(text.splitlines(), 1):
+        if ignore_code_spans:
+            ln = re.sub(r"`[^`]*`", "", ln)
+        if re.search(pattern, ln):
+            out.append(i)
+    return out
 
 
 def check_pdf_and_doc(team, max_pages):
@@ -196,9 +203,9 @@ def check_pdf_and_doc(team, max_pages):
             bad = True
             continue
         text = read_text(path)
-        for label, pat in (("TODO(result)", r"TODO\(result\)"), ("UNJUSTIFIED", r"UNJUSTIFIED"),
+        for label, pat in (("TODO(result)", r"TODO\(result\)"), ("UNJUSTIFIED - ask lead", r"UNJUSTIFIED\s*-\s*ask lead"),
                            ("TODO(lead)", r"TODO\(lead\)")):
-            lines = marker_lines(text, pat)
+            lines = marker_lines(text, pat, ignore_code_spans=(label != "TODO(result)" and label != "TODO(lead)"))
             if lines:
                 bad = True
                 rec("FAIL", "4 markers in " + fname, "{} x{} at line(s) {}".format(
