@@ -1,0 +1,8 @@
+#!/bin/sh
+# Blocks commits that would publish gated match data, derived exports or secrets.
+# Enable once per clone:   git config core.hooksPath .githooks
+# Never bypass with --no-verify; fix or unstage the file instead (see SECURITY.md).
+PY=.venv/Scripts/python.exe
+[ -x "$PY" ] || PY=.venv/bin/python
+[ -x "$PY" ] || PY=python
+exec "$PY" -m mtah.guard --staged
