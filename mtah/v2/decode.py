@@ -27,7 +27,8 @@ def emissions(trk):
 def _viterbi_min_dead(e, k, sw, dc):
     """Exact Viterbi over H, A, D where every D run after the first frame lasts >= k frames.
     D1 = first dead frame, DK = k-th dead frame or later; the stages between are forced, so the
-    chain reaching DK at t scores D1(t-k+1) + dead emissions in between (prefix sums).
+    chain reaching DK at t scores D1(t-k+1) + dead emissions in between (prefix sums). The block
+    may start in DK and may end in H, A, DK or inside a not-yet-complete chain.
     Ties keep the current state."""
     n = len(e)
     eh, ea, ed = e[:, 0].tolist(), e[:, 1].tolist(), e[:, 2].tolist()
@@ -44,8 +45,21 @@ def _viterbi_min_dead(e, k, sw, dc):
         bdk[t] = 2 if DK >= chain else 3
         H, A, DK = ch[0] + eh[t], ca[0] + ea[t], max(DK, chain) + ed[t]
         bh[t], ba[t] = ch[2], ca[2]
+    # End: H, A, DK, or still inside a dead chain entered at t0 > n-k (a block may end mid-stoppage).
+    best, s, t0_end = H, 0, -1
+    if A > best:
+        best, s = A, 1
+    if DK > best:
+        best, s = DK, 2
+    for t0 in range(max(1, n - k + 1), n):
+        v = d1[t0] + cd[n] - cd[t0 + 1]
+        if v > best:
+            best, s, t0_end = v, 3, t0
     path = np.empty(n, dtype=np.int8)
-    s, t = int(np.argmax([H, A, DK])), n - 1
+    t = n - 1
+    if s == 3:                                     # ended mid-chain: frames t0_end .. n-1 all dead
+        path[t0_end:] = 2
+        t, s = t0_end - 1, b1[t0_end]
     while t >= 0:
         path[t] = s
         if s == 2 and bdk[t] == 3:                 # forced chain: frames t-k+1 .. t all dead
