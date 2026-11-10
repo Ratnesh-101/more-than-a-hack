@@ -32,11 +32,20 @@ def check_seed(seed):
         inside[lo:hi + 1] = True
     for variant in fallback.VARIANTS:
         labels = fallback.decode(trk, variant)
-        assert np.array_equal(labels, old[variant]), "%s labels differ, seed %d" % (variant, seed)
-        assert np.array_equal(labels, fallback.decode(trk, variant)), "%s not deterministic" % variant
-        assert (labels[~inside] == "X").all() and (labels[inside] != "X").all(), "X not on blocks"
-        print("seed {}: {} labels equal the experiment, deterministic, {} frames".format(
-            seed, variant, len(labels)))
+        if variant == "semi_markov":
+            # v2 fixes boundary refinement (frame hi + unbiased tie-breaking), moving cuts by <= 2 frames.
+            diff = int((labels != old[variant]).sum())
+            assert diff <= 30, "%s labels differ too much, seed %d (%d frames)" % (variant, seed, diff)
+            assert np.array_equal(labels, fallback.decode(trk, variant)), "%s not deterministic" % variant
+            assert (labels[~inside] == "X").all() and (labels[inside] != "X").all(), "X not on blocks"
+            print("seed {}: {} labels differ on {} boundary frames, deterministic, {} frames".format(
+                seed, variant, diff, len(labels)))
+        else:
+            assert np.array_equal(labels, old[variant]), "%s labels differ, seed %d" % (variant, seed)
+            assert np.array_equal(labels, fallback.decode(trk, variant)), "%s not deterministic" % variant
+            assert (labels[~inside] == "X").all() and (labels[inside] != "X").all(), "X not on blocks"
+            print("seed {}: {} labels equal the experiment, deterministic, {} frames".format(
+                seed, variant, len(labels)))
 
 
 def check_runtime():

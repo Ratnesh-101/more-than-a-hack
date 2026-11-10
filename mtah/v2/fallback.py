@@ -283,10 +283,18 @@ def _segment_dp(cum, logdur, trans):
 
 
 def _refine(e, cut, a, b, lo, hi):
-    """Frame of the a->b boundary in [lo, hi] that maximises emissions (a before, b after)."""
-    cand = np.arange(lo, hi + 1)
-    gain = np.concatenate(([0.0], np.cumsum(e[lo:hi, a] - e[lo:hi, b])))
-    return int(cand[np.argmax(gain)]) if len(cand) else cut
+    """Frame of the a->b boundary in [lo, hi + 1] that maximises emissions (a before, b after).
+
+    Ties are broken by distance to the coarse DP cut (keeping the DP cut on flat evidence),
+    with the smaller frame index chosen if equidistant.
+    """
+    if lo > hi:
+        return cut
+    cand = np.arange(lo, hi + 2)
+    gain = np.concatenate(([0.0], np.cumsum(e[lo:hi + 1, a] - e[lo:hi + 1, b])))
+    ties = np.flatnonzero(gain == np.max(gain))
+    best_idx = ties[np.argmin(np.abs(cand[ties] - cut))]
+    return int(cand[best_idx])
 
 
 def _semi_markov_block(e, fps):
