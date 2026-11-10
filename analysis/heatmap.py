@@ -7,6 +7,7 @@ import sys
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.colors as mcolors
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -195,6 +196,46 @@ def possession_density(trk, labels, team, bins=(21, 14), sigma=1.0):
     return _smooth_2d(density, sigma=sigma)
 
 
+def timeline_bins(labels, lo, hi, fps=25):
+    """Discretise frame labels in range lo..hi into 1-second bins.
+
+    Returns integer codes:
+      0: omitted (X or unlabelled)
+      1: Barcelona ('H')
+      2: Athletic Club ('A')
+      3: Dead ball ('D')
+    """
+    sub_lbls = labels[lo:hi + 1]
+    n_frames = len(sub_lbls)
+    n_bins = int(np.ceil(n_frames / fps))
+    out = np.zeros(n_bins, dtype=int)
+    for b in range(n_bins):
+        chunk = sub_lbls[b * fps:(b + 1) * fps]
+        if len(chunk) == 0:
+            continue
+        counts = {"H": 0, "A": 0, "D": 0}
+        for c in chunk:
+            if c in counts:
+                counts[c] += 1
+        best = max(counts, key=counts.get)
+        if counts[best] > 0:
+            out[b] = 1 if best == "H" else (2 if best == "A" else 3)
+    return out
+
+
+def possession_thirds(density):
+    """Calculate defensive, middle, and attacking thirds possession shares from a 21x14 density array.
+
+    Bins 0..6: Defensive third (own third)
+    Bins 7..13: Middle third (neutral)
+    Bins 14..20: Attacking third (opponent third)
+    """
+    def_share = float(density[0:7, :].sum())
+    mid_share = float(density[7:14, :].sum())
+    att_share = float(density[14:21, :].sum())
+    return def_share, mid_share, att_share
+
+
 def make_heatmap(csv, out_png, data_dir=None, dpi=200, figsize=(13.0, 6.2)):
     """Generate two-panel possession heatmap figure and save to out_png."""
     if isinstance(csv, str):
@@ -285,15 +326,141 @@ def make_heatmap(csv, out_png, data_dir=None, dpi=200, figsize=(13.0, 6.2)):
     return target_path
 
 
+def make_timeline(csv, out_png, trk=None, data_dir=None, dpi=200, figsize=(12.0, 5.8)):
+    """Generate possession timeline strip and pitch-thirds bar chart figure."""
+    if isinstance(csv, str):
+        df = pd.read_csv(csv)
+        labels = df["label"].values
+    elif isinstance(csv, pd.DataFrame):
+        labels = csv["label"].values
+    else:
+        labels = np.asarray(csv)
+
+    if trk is None:
+        trk = tracking.from_atd(data_dir=data_dir)
+
+    fps = trk.get("fps", 25)
+    blocks = trk.get("blocks", [(1, 0, len(labels) - 1)])
+
+    b1 = blocks[0]
+    b2 = blocks[1] if len(blocks) > 1 else blocks[0]
+
+    bins1 = timeline_bins(labels, b1[1], b1[2], fps=fps)
+    bins2 = timeline_bins(labels, b2[1], b2[2], fps=fps)
+
+    dur1_min = len(bins1) / 60.0
+    dur2_min = len(bins2) / 60.0
+
+    density_h = possession_density(trk, labels, "H")
+    density_a = possession_density(trk, labels, "A")
+
+    h_def, h_mid, h_att = possession_thirds(density_h)
+    a_def, a_mid, a_att = possession_thirds(density_a)
+
+    fig = plt.figure(figsize=figsize, dpi=dpi, facecolor="white")
+    gs = fig.add_gridspec(2, 2, height_ratios=[0.22, 0.78], width_ratios=[1.0, 1.0],
+                          wspace=0.15, hspace=0.42, left=0.08, right=0.94, top=0.88, bottom=0.10)
+
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[0, 1])
+    ax_bar = fig.add_subplot(gs[1, :])
+
+    cmap = mcolors.ListedColormap(["#ffffff", Palette.STRIP_H, Palette.STRIP_A, Palette.STRIP_D])
+
+    ax1.imshow(bins1[None, :], aspect="auto", cmap=cmap, vmin=0, vmax=3,
+               extent=[0, dur1_min, 0, 1], interpolation="nearest")
+    ax2.imshow(bins2[None, :], aspect="auto", cmap=cmap, vmin=0, vmax=3,
+               extent=[45, 45 + dur2_min, 0, 1], interpolation="nearest")
+
+    for ax in (ax1, ax2):
+        ax.set_yticks([])
+        for sp in ax.spines.values():
+            sp.set_visible(False)
+
+    ax1.set_xticks([0, 15, 30, 45])
+    ax1.set_xticklabels(["0'", "15'", "30'", "45'"], fontsize=8.5, color=Palette.TEXT_COLOR)
+    ax1.set_title("First Half (1 s bins)", fontsize=9.5, fontweight="bold", loc="left", color=Palette.TEXT_COLOR)
+
+    ax2.set_xticks([45, 60, 75, 90])
+    ax2.set_xticklabels(["45'", "60'", "75'", "90'"], fontsize=8.5, color=Palette.TEXT_COLOR)
+    ax2.set_title("Second Half (1 s bins)", fontsize=9.5, fontweight="bold", loc="left", color=Palette.TEXT_COLOR)
+
+    # Legend at top
+    patches = [
+        mpatches.Patch(color=Palette.STRIP_H, label="Barcelona (Home)"),
+        mpatches.Patch(color=Palette.STRIP_A, label="Athletic Club (Away)"),
+        mpatches.Patch(color=Palette.STRIP_D, label="Dead ball (stoppage)"),
+    ]
+    fig.legend(handles=patches, loc="upper center", bbox_to_anchor=(0.51, 0.98),
+               ncol=3, frameon=False, fontsize=9)
+
+    # Bar chart
+    categories = ["Defensive third\n(own third)", "Middle third\n(neutral)", "Attacking third\n(opponent third)"]
+    x = np.arange(len(categories))
+    bar_width = 0.30
+
+    h_vals = [h_def * 100.0, h_mid * 100.0, h_att * 100.0]
+    a_vals = [a_def * 100.0, a_mid * 100.0, a_att * 100.0]
+
+    rects1 = ax_bar.bar(x - bar_width / 2, h_vals, bar_width, label="Barcelona", color=Palette.STRIP_H)
+    rects2 = ax_bar.bar(x + bar_width / 2, a_vals, bar_width, label="Athletic Club", color=Palette.STRIP_A)
+
+    for rect in rects1:
+        h = rect.get_height()
+        ax_bar.annotate("{:.1f}%".format(h), xy=(rect.get_x() + rect.get_width() / 2, h),
+                        xytext=(0, 3), textcoords="offset points", ha="center", va="bottom",
+                        fontsize=9, fontweight="bold", color=Palette.TEXT_COLOR)
+
+    for rect in rects2:
+        h = rect.get_height()
+        ax_bar.annotate("{:.1f}%".format(h), xy=(rect.get_x() + rect.get_width() / 2, h),
+                        xytext=(0, 3), textcoords="offset points", ha="center", va="bottom",
+                        fontsize=9, fontweight="bold", color=Palette.TEXT_COLOR)
+
+    ax_bar.set_ylabel("Share of visible-ball possession (%)", fontsize=9.5, color=Palette.TEXT_COLOR)
+    ax_bar.set_title("Possession share by pitch third (normalised attacking direction)",
+                     fontsize=10.5, fontweight="bold", pad=12, color=Palette.TEXT_COLOR)
+    ax_bar.set_xticks(x)
+    ax_bar.set_xticklabels(categories, fontsize=9.5, color=Palette.TEXT_COLOR)
+    ax_bar.set_ylim(0, max(max(h_vals), max(a_vals)) * 1.18)
+
+    # Styling: no chart borders, no gridlines
+    for sp in ("top", "right"):
+        ax_bar.spines[sp].set_visible(False)
+    ax_bar.spines["left"].set_color("#cccccc")
+    ax_bar.spines["bottom"].set_color("#cccccc")
+    ax_bar.grid(False)
+    ax_bar.legend(frameon=False, loc="upper right", fontsize=9)
+
+    target_path = out_png
+    if os.path.isdir(target_path) or not target_path.lower().endswith(".png"):
+        os.makedirs(target_path, exist_ok=True)
+        target_path = os.path.join(target_path, "possession_timeline.png")
+    else:
+        os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+
+    fig.savefig(target_path, dpi=dpi, metadata={"Software": None, "Creation Time": None, "Date": None})
+    plt.close(fig)
+    return target_path
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Generate possession heatmaps.")
+    parser = argparse.ArgumentParser(description="Generate possession heatmaps and timelines.")
     parser.add_argument("--csv", default="submissions/nirakshak.csv", help="Submission CSV path")
     parser.add_argument("--out", default="docs/out/figures", help="Output directory or file path")
     parser.add_argument("--data-dir", default=None, help="Gated match data directory")
     args = parser.parse_args()
 
-    saved_path = make_heatmap(args.csv, args.out, data_dir=args.data_dir)
-    print("Saved heatmap to {}".format(saved_path))
+    out_heatmap = args.out
+    out_timeline = args.out
+    if not os.path.isdir(args.out) and args.out.lower().endswith(".png"):
+        base, ext = os.path.splitext(args.out)
+        out_timeline = "{}_timeline{}".format(base, ext)
+
+    saved_heatmap = make_heatmap(args.csv, out_heatmap, data_dir=args.data_dir)
+    saved_timeline = make_timeline(args.csv, out_timeline, data_dir=args.data_dir)
+    print("Saved heatmap to {}".format(saved_heatmap))
+    print("Saved timeline to {}".format(saved_timeline))
 
 
 if __name__ == "__main__":

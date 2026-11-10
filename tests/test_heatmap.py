@@ -7,7 +7,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
-from analysis.heatmap import Palette, draw_pitch, possession_density, make_heatmap
+from analysis.heatmap import (
+    Palette,
+    draw_pitch,
+    make_heatmap,
+    make_timeline,
+    possession_density,
+    possession_thirds,
+    timeline_bins,
+)
 
 
 def test_draw_pitch_default():
@@ -154,5 +162,76 @@ def test_make_heatmap_synthetic(tmp_path, monkeypatch):
             f.write(f"{i},{lbl}\n")
 
     saved = make_heatmap(csv_path, out_png)
+    assert os.path.isfile(saved)
+    assert os.path.getsize(saved) > 1000
+
+
+def test_timeline_bins_synthetic():
+    """Test 1-second binning over synthetic label vector with X omitted."""
+    # 25 fps: 50 frames of H (2 s), 50 frames of A (2 s), 25 frames of D (1 s), 25 frames of X (1 s)
+    fps = 25
+    labels = np.array(["H"] * 50 + ["A"] * 50 + ["D"] * 25 + ["X"] * 25)
+    bins = timeline_bins(labels, 0, len(labels) - 1, fps=fps)
+    # Expected: 2 bins of H (1), 2 bins of A (2), 1 bin of D (3), 1 bin of X (0)
+    assert len(bins) == 6
+    assert list(bins) == [1, 1, 2, 2, 3, 0]
+
+
+def test_timeline_bins_majority_voting():
+    """Test modal selection within a 1-second bin."""
+    # 25 frames: 15 H, 5 A, 5 D -> should be H (1)
+    chunk1 = ["H"] * 15 + ["A"] * 5 + ["D"] * 5
+    # 25 frames: 10 D, 5 H, 10 X -> D has most among (H,A,D) -> should be D (3)
+    chunk2 = ["D"] * 10 + ["H"] * 5 + ["X"] * 10
+    labels = np.array(chunk1 + chunk2)
+    bins = timeline_bins(labels, 0, len(labels) - 1, fps=25)
+    assert len(bins) == 2
+    assert bins[0] == 1
+    assert bins[1] == 3
+
+
+def test_possession_thirds_synthetic():
+    """Test pitch thirds calculation from synthetic 21x14 density array."""
+    grid = np.zeros((21, 14), dtype=float)
+    # Defensive third: bins 0..6 (7 bins)
+    grid[0:7, :] = 0.20 / (7 * 14)
+    # Middle third: bins 7..13 (7 bins)
+    grid[7:14, :] = 0.50 / (7 * 14)
+    # Attacking third: bins 14..20 (7 bins)
+    grid[14:21, :] = 0.30 / (7 * 14)
+
+    assert np.isclose(grid.sum(), 1.0)
+    d_share, m_share, a_share = possession_thirds(grid)
+    assert np.isclose(d_share, 0.20)
+    assert np.isclose(m_share, 0.50)
+    assert np.isclose(a_share, 0.30)
+    assert np.isclose(d_share + m_share + a_share, 1.0)
+
+
+def test_make_timeline_synthetic(tmp_path):
+    """Test make_timeline with synthetic tracking and labels."""
+    n = 250
+    fps = 25
+    px = np.zeros((n, 2))
+    px[:, 0] = 40.0
+    px[:, 1] = 60.0
+    synthetic_trk = {
+        "pitch": (105.3, 68.0),
+        "fps": fps,
+        "bx": np.linspace(10, 90, n),
+        "by": np.linspace(10, 50, n),
+        "px": px,
+        "team": np.array([0, 1]),
+        "blocks": [(1, 0, 124), (2, 125, 249)],
+    }
+    csv_path = str(tmp_path / "sub_timeline.csv")
+    out_png = str(tmp_path / "timeline.png")
+    with open(csv_path, "w") as f:
+        f.write("frame,label\n")
+        for i in range(n):
+            lbl = "H" if i < 100 else ("A" if i < 200 else "D")
+            f.write(f"{i},{lbl}\n")
+
+    saved = make_timeline(csv_path, out_png, trk=synthetic_trk)
     assert os.path.isfile(saved)
     assert os.path.getsize(saved) > 1000
