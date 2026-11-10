@@ -117,7 +117,12 @@ def emissions(trk):
     t_h, t_a, kick, still = _touches(trk)
     r = np.zeros(n)
     recent = np.zeros(n, bool)
-    for _, lo, hi in trk["blocks"]:
+    for half, lo, hi in trk["blocks"]:
+        kick_frame = (trk.get("kickoffs") or {}).get(half)
+        if kick_frame is not None and kick_frame > lo:
+            t_h[lo:kick_frame] = False
+            t_a[lo:kick_frame] = False
+            kick[lo:kick_frame] = False
         lead = (touch._since(t_a, lo, hi) - touch._since(t_h, lo, hi)).astype(np.float64)
         r[lo:hi + 1] = np.clip(lead / (TAU * fps), -CLIP, CLIP)
         recent[lo:hi + 1] = touch._since(kick, lo, hi) < LIVE_S * fps

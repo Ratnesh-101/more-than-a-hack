@@ -111,7 +111,11 @@ def team_logodds(trk):
     n, fps = len(trk["bx"]), trk["fps"]
     t_h, t_a = _touches(trk)
     r = np.zeros(n)
-    for _, lo, hi in trk["blocks"]:
+    for half, lo, hi in trk["blocks"]:
+        kick_frame = (trk.get("kickoffs") or {}).get(half)
+        if kick_frame is not None and kick_frame > lo:
+            t_h[lo:kick_frame] = False
+            t_a[lo:kick_frame] = False
         lead = (_since(t_a, lo, hi) - _since(t_h, lo, hi)).astype(np.float64)
         r[lo:hi + 1] = np.clip(lead / (TAU * fps), -CLIP, CLIP)
     return r
