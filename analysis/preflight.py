@@ -12,6 +12,12 @@ value as --sha256, or save it to submissions/<team>.csv.sha256 (first hex token 
 
 Items: 1 CSV validates | 2 SHA-256 | 3 X only outside graded halves | 4 PDF + document markers |
 5 repo hygiene | 6 repo readiness | 7 reproduction commands agree | 8 repo URL | 9 reminder.
+
+Items 5 and 6 look at exactly what would be published: `git ls-files --cached --others
+--exclude-standard` (tracked files plus untracked files git does not ignore). A git-ignored or
+excluded file (data/*, docs/out/*.pdf, anything in .git/info/exclude) is not published and is not
+checked; a tracked or non-ignored one is. Item 4 still reads docs/out and docs/TECHNICAL.md
+directly.
 """
 
 import argparse
@@ -25,7 +31,6 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-SKIP_DIRS = {".venv", "venv", "env", "__pycache__", ".git", ".pytest_cache", "node_modules"}
 RESULTS = []   # (status, item, message)
 
 
@@ -34,15 +39,23 @@ def rec(status, item, msg):
     print("[{}] {}: {}".format(status, item, msg))
 
 
-def walk(skip_extra=()):
-    """Yield (relative posix path, absolute path) for every file under ROOT, skipping venvs."""
-    for dirpath, dirnames, filenames in os.walk(ROOT):
-        rel_dir = os.path.relpath(dirpath, ROOT).replace(os.sep, "/")
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS
-                       and not (rel_dir + "/" + d).lstrip("./") in skip_extra]
-        for name in filenames:
-            ab = os.path.join(dirpath, name)
-            yield os.path.relpath(ab, ROOT).replace(os.sep, "/"), ab
+def published_files(root=ROOT):
+    """[(relative posix path, absolute path)] of exactly what would be published.
+
+    That is `git ls-files --cached --others --exclude-standard`: every tracked file, plus every
+    untracked file that no .gitignore, .git/info/exclude or global exclude hides. A file git
+    ignores (data/*, docs/out/*.pdf) is not published, so the hygiene and readiness checks do
+    not look at it; a file under data/ that is tracked (even force-added) or not ignored is.
+    Raises RuntimeError when git cannot list the files: guessing from the working tree would
+    hide exactly the mistakes these checks exist for.
+    """
+    p = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                       cwd=root, capture_output=True)
+    if p.returncode != 0:
+        raise RuntimeError("git ls-files failed in {}: {}".format(
+            root, p.stderr.decode("utf-8", "replace").strip()))
+    rels = sorted({r for r in p.stdout.decode("utf-8", "replace").split("\0") if r})
+    return [(r, os.path.join(root, *r.split("/"))) for r in rels]
 
 
 def read_text(path):
@@ -215,34 +228,23 @@ def check_pdf_and_doc(team, max_pages):
 
 
 # ---- 5 --------------------------------------------------------------------------------------
-def check_hygiene():
+PUBLISHED = "tracked or not git-ignored"
+
+
+def hygiene_file_checks(files):
+    """The per-file hygiene checks over the published files [(rel, abs)]."""
     item = "5 repo hygiene"
-    code, out = run([sys.executable, "-m", "mtah.guard"])
-    tail = " | ".join(ln.strip() for ln in out.strip().splitlines()[-4:])
-    rec("PASS" if code == 0 else "FAIL", item + " (mtah.guard)", "exit {}: {}".format(code, tail))
-
-    files = list(walk())
-    bad_data = [r for r, _ in files if r.startswith("data/") and r != "data/README.md"
-                and not r.startswith("data/cache/")]
-    cache = [r for r, _ in files if r.startswith("data/cache/")]
-    if bad_data:
-        rec("FAIL", item + " (data/)", "files other than README.md: {}".format(bad_data[:10]))
-    else:
-        rec("PASS", item + " (data/)", "only data/README.md" +
-            (" (+{} git-ignored file(s) in data/cache/)".format(len(cache)) if cache else ""))
+    bad_data = [r for r, _ in files if r.startswith("data/") and r != "data/README.md"]
+    rec("FAIL" if bad_data else "PASS", item + " (data/)",
+        "{} under data/ other than README.md: {}".format(PUBLISHED, bad_data[:10]) if bad_data
+        else "only data/README.md is {}".format(PUBLISHED))
     mp4 = [r for r, _ in files if r.lower().endswith(".mp4")]
-    rec("FAIL" if mp4 else "PASS", item + " (*.mp4)", str(mp4[:10]) if mp4 else "none")
+    rec("FAIL" if mp4 else "PASS", item + " (*.mp4)",
+        "{}: {}".format(PUBLISHED, mp4[:10]) if mp4 else "none " + PUBLISHED)
     pdfs = [r for r, _ in files if r.lower().endswith(".pdf")]
-    rec("INFO", item + " (*.pdf)", "PDFs in tree {} are git-ignored; the PDF is uploaded to the "
-        "form, NOT the repo".format(pdfs))
-
-    gi_path = os.path.join(ROOT, ".gitignore")
-    gi = read_text(gi_path).splitlines() if os.path.isfile(gi_path) else []
-    gi = [ln.strip() for ln in gi]
-    missing = [p for p in ("data/*", "*.pdf", "evaluation/results/*.csv") if p not in gi]
-    rec("FAIL" if missing else "PASS", item + " (.gitignore)",
-        "missing patterns {}".format(missing) if missing else "data/*, *.pdf, "
-        "evaluation/results/*.csv present")
+    rec("FAIL" if pdfs else "PASS", item + " (*.pdf)",
+        "{}: {} (the PDF goes to the form, NOT the repo)".format(PUBLISHED, pdfs[:10]) if pdfs
+        else "none {} (the PDF goes to the form, NOT the repo)".format(PUBLISHED))
 
     pub = [r for r, _ in files if r.startswith("evaluation/gt/") and r.endswith("_public.csv")]
     rec("PASS" if pub else "FAIL", item + " (public GT)",
@@ -251,11 +253,56 @@ def check_hygiene():
     full = [r for r, _ in files if gt_re.search(os.path.basename(r)) and not r.endswith("_public.csv")
             and "_public" not in os.path.basename(r)]
     rec("FAIL" if full else "PASS", item + " (no full-match GT)",
-        "FOUND {}".format(full) if full else "none in tree")
+        "FOUND ({}) {}".format(PUBLISHED, full) if full else "none " + PUBLISHED)
+
+
+def check_hygiene(root=ROOT):
+    item = "5 repo hygiene"
+    code, out = run([sys.executable, "-m", "mtah.guard"])
+    tail = " | ".join(ln.strip() for ln in out.strip().splitlines()[-4:])
+    rec("PASS" if code == 0 else "FAIL", item + " (mtah.guard)", "exit {}: {}".format(code, tail))
+
+    try:
+        files = published_files(root)
+    except (OSError, RuntimeError) as err:
+        rec("FAIL", item + " (published files)", "cannot list what would be published: {}".format(err))
+        return
+    hygiene_file_checks(files)
+
+    gi_path = os.path.join(root, ".gitignore")
+    gi = read_text(gi_path).splitlines() if os.path.isfile(gi_path) else []
+    gi = [ln.strip() for ln in gi]
+    missing = [p for p in ("data/*", "*.pdf", "evaluation/results/*.csv") if p not in gi]
+    rec("FAIL" if missing else "PASS", item + " (.gitignore)",
+        "missing patterns {}".format(missing) if missing else "data/*, *.pdf, "
+        "evaluation/results/*.csv present")
 
 
 # ---- 6 --------------------------------------------------------------------------------------
-def check_readiness():
+def absolute_path_hits(files):
+    """'rel:line (pattern)' for every absolute user path in a published .py/.md/.txt file."""
+    # patterns built from pieces so this file does not flag itself
+    pats = [("C:" + "\\\\Users", re.compile(r"[A-Za-z]:\\{1,2}Users", re.I)),
+            ("/" + "Users/", re.compile(r"/" + "Users/")),
+            ("/" + "home/", re.compile(r"/" + "home/"))]
+    lint_def = re.compile(r"""^\s*\(?\s*[rR]["']|re\.(compile|search|match|findall|sub)\(""")
+    hits = []
+    for rel, ab in files:
+        if not rel.endswith((".py", ".md", ".txt")) or rel == "analysis/preflight.py":
+            continue
+        if not os.path.isfile(ab):
+            continue   # tracked but deleted in the work tree: nothing to read
+        for i, ln in enumerate(read_text(ab).splitlines(), 1):
+            if lint_def.search(ln):
+                continue   # a regex literal that defines a path linter, not a real path
+            for name, rx in pats:
+                if rx.search(ln):
+                    hits.append("{}:{} ({})".format(rel, i, name))
+                    break
+    return hits
+
+
+def check_readiness(root=ROOT):
     item = "6 repo readiness"
     readme = os.path.join(ROOT, "README.md")
     txt = read_text(readme) if os.path.isfile(readme) else ""
@@ -272,33 +319,21 @@ def check_readiness():
         rec("FAIL" if unpinned else "PASS", item + " (requirements.txt)",
             "unpinned: {}".format(unpinned) if unpinned else "every requirement uses ==")
 
-    # patterns built from pieces so this file does not flag itself
-    pats = [("C:" + "\\\\Users", re.compile(r"[A-Za-z]:\\{1,2}Users", re.I)),
-            ("/" + "Users/", re.compile(r"/" + "Users/")),
-            ("/" + "home/", re.compile(r"/" + "home/"))]
-    lint_def = re.compile(r"""^\s*\(?\s*[rR]["']|re\.(compile|search|match|findall|sub)\(""")
-    hits = []
-    for rel, ab in walk():
-        if rel.startswith(("data/", "docs/out/", "analysis/out/")):
-            continue
-        if not rel.endswith((".py", ".md", ".txt")) or rel == "analysis/preflight.py":
-            continue
-        for i, ln in enumerate(read_text(ab).splitlines(), 1):
-            if lint_def.search(ln):
-                continue   # a regex literal that defines a path linter, not a real path
-            for name, rx in pats:
-                if rx.search(ln):
-                    hits.append("{}:{} ({})".format(rel, i, name))
-                    break
+    try:
+        files = published_files(root)
+    except (OSError, RuntimeError) as err:
+        rec("FAIL", item + " (published files)", "cannot list what would be published: {}".format(err))
+        return
+    hits = absolute_path_hits(files)
     rec("FAIL" if hits else "PASS", item + " (absolute user paths)",
         "{} hit(s): {}{}".format(len(hits), hits[:15], " ..." if len(hits) > 15 else "")
-        if hits else "none in .py/.md/.txt")
+        if hits else "none in .py/.md/.txt that is " + PUBLISHED)
 
     words = re.compile(r"\b(" + "TO" + "DO|FIX" + "ME|X" + "XX)\b")
     hits = []
-    for rel, ab in walk():
+    for rel, ab in files:
         if (rel.startswith("mtah/v2/") or rel.startswith("analysis/")) and rel.endswith(".py") \
-                and rel != "analysis/preflight.py":
+                and rel != "analysis/preflight.py" and os.path.isfile(ab):
             for i, ln in enumerate(read_text(ab).splitlines(), 1):
                 if words.search(ln):
                     hits.append("{}:{}".format(rel, i))
