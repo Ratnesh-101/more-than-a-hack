@@ -5,8 +5,10 @@ Possession density and match timeline for FC Barcelona vs Athletic Club, derived
 the submission's labels rather than ground truth. The ball is visible on 59.3% of graded frames
 (94,214 of 158,857 frames), so densities describe visible-ball frames only; labels are the
 submission's, not ground truth. Attacking direction is normalised left to right for each team
-across both halves. Each team's spatial density is normalised to its own total visible possession
-frames so panels share an identical colour scale, smoothed with a normalised Gaussian kernel.
+across both halves. Frames with the visible ball outside the pitch lines (490 frames: 288 Barcelona,
+202 Atletic Club) are excluded from the density. Each team's spatial density is normalised to its
+own total visible possession frames on the pitch so panels share an identical colour scale,
+smoothed with a normalised Gaussian kernel.
 """
 
 import argparse
@@ -34,9 +36,32 @@ CAPTION = (
     "the submission's labels rather than ground truth. The ball is visible on 59.3% of graded frames "
     "(94,214 of 158,857 frames), so densities describe visible-ball frames only; labels are the "
     "submission's, not ground truth. Attacking direction is normalised left to right for each team "
-    "across both halves. Each team's spatial density is normalised to its own total visible possession "
-    "frames so panels share an identical colour scale, smoothed with a normalised Gaussian kernel."
+    "across both halves. Frames with the visible ball outside the pitch lines (490 frames: 288 Barcelona, "
+    "202 Atletic Club) are excluded from the density. Each team's spatial density is normalised to its "
+    "own total visible possession frames on the pitch so panels share an identical colour scale, "
+    "smoothed with a normalised Gaussian kernel."
 )
+
+
+def get_team_names(trk=None, data_dir=None):
+    """Retrieve (home, away) team names from trk, match metadata XML, or fallback."""
+    if trk is not None and "team_names" in trk:
+        names = trk["team_names"]
+        if len(names) >= 2:
+            return str(names[0]), str(names[1])
+    try:
+        import games
+        import xml.etree.ElementTree as ET
+        paths = games.asset_paths(data_dir=data_dir)
+        meta_path = paths.get("atd_meta")
+        if meta_path and os.path.isfile(meta_path):
+            root = ET.parse(meta_path).getroot()
+            names = [team.findtext("Name") for team in root.iter("Team") if team.findtext("Name")]
+            if len(names) >= 2:
+                return names[0], names[1]
+    except Exception:
+        pass
+    return "Barcelona", "Atletic Club"
 
 
 class Palette:
@@ -234,7 +259,9 @@ def possession_density(trk, labels, team, bins=(21, 14), sigma=1.0):
             x_norm[sl] = length - bx[sl]
 
     vis_mask = ~np.isnan(bx) & ~np.isnan(by)
-    valid = (labels == team_label) & vis_mask & in_blocks
+    # Exclude frames where the visible ball lies outside pitch lines [0, length] x [0, width]
+    on_pitch = (bx >= 0.0) & (bx <= length) & (by >= 0.0) & (by <= width)
+    valid = (labels == team_label) & vis_mask & in_blocks & on_pitch
     if not valid.any():
         return np.zeros(bins, dtype=float)
 
@@ -285,7 +312,7 @@ def possession_thirds(density):
     return def_share, mid_share, att_share
 
 
-def make_heatmap(csv, out_png, data_dir=None, dpi=200, figsize=(13.0, 6.2)):
+def make_heatmap(csv, out_png, data_dir=None, dpi=200, figsize=(13.0, 5.5)):
     """Generate two-panel possession heatmap figure and save to out_png."""
     if isinstance(csv, str):
         df = pd.read_csv(csv)
@@ -297,6 +324,7 @@ def make_heatmap(csv, out_png, data_dir=None, dpi=200, figsize=(13.0, 6.2)):
 
     trk = tracking.from_atd(data_dir=data_dir)
     length, width = float(trk["pitch"][0]), float(trk["pitch"][1])
+    home_name, away_name = get_team_names(trk=trk, data_dir=data_dir)
 
     density_h = possession_density(trk, labels, "H")
     density_a = possession_density(trk, labels, "A")
@@ -319,11 +347,8 @@ def make_heatmap(csv, out_png, data_dir=None, dpi=200, figsize=(13.0, 6.2)):
 
     vmax = max(float(density_h.max()), float(density_a.max()))
 
-    fig = plt.figure(figsize=figsize, dpi=dpi, facecolor="white")
-    gs = fig.add_gridspec(2, 2, height_ratios=[1.0, 0.12], width_ratios=[1.0, 1.0],
-                          left=0.04, right=0.96, top=0.88, bottom=0.08, wspace=0.10, hspace=0.25)
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[0, 1])
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize, dpi=dpi, facecolor="white")
+    fig.subplots_adjust(left=0.04, right=0.96, top=0.88, bottom=0.15, wspace=0.10)
 
     draw_pitch(ax1, length=length, width=width)
     draw_pitch(ax2, length=length, width=width)
@@ -333,35 +358,43 @@ def make_heatmap(csv, out_png, data_dir=None, dpi=200, figsize=(13.0, 6.2)):
     ax2.imshow(density_a.T, origin="lower", extent=[0, length, 0, width],
                cmap=Palette.CMAP_AWAY, vmin=0.0, vmax=vmax, zorder=1, aspect="equal")
 
-    ax1.set_title("Barcelona (Home)\n{:,} possession frames ({:.1f}% visible ball)".format(h_count, h_pct),
-                  fontsize=11, fontweight="bold", pad=10, color=Palette.TEXT_COLOR)
-    ax2.set_title("Athletic Club (Away)\n{:,} possession frames ({:.1f}% visible ball)".format(a_count, a_pct),
-                  fontsize=11, fontweight="bold", pad=10, color=Palette.TEXT_COLOR)
+    ax1.set_title(f"{home_name} (Home)\n{h_count:,} possession frames ({h_pct:.1f}% visible ball)",
+                  fontsize=10.5, fontweight="bold", pad=8, color=Palette.TEXT_COLOR)
+    ax2.set_title(f"{away_name} (Away)\n{a_count:,} possession frames ({a_pct:.1f}% visible ball)",
+                  fontsize=10.5, fontweight="bold", pad=8, color=Palette.TEXT_COLOR)
 
     for ax in (ax1, ax2):
         ax.annotate("", xy=(length * 0.72, -5.5), xytext=(length * 0.28, -5.5),
                     arrowprops=dict(arrowstyle="->", color="#555555", lw=1.2), zorder=3)
         ax.text(length * 0.5, -4.5, "Attacking direction",
-                ha="center", va="bottom", fontsize=8.5, color="#555555", zorder=3)
+                ha="center", va="bottom", fontsize=8.0, color="#555555", zorder=3)
         ax.set_ylim(-9.0, width + 3.0)
 
-    # Shared colourbar at center bottom
-    cax = fig.add_subplot(gs[1, :])
-    vals = np.linspace(0, vmax, 256)
-    vals_norm = vals / max(vmax, 1e-12)
-    c_home = Palette.CMAP_HOME(vals_norm)
-    c_away = Palette.CMAP_AWAY(vals_norm)
-    img = np.stack([c_away, c_home], axis=0)
+    # Position two slim side-by-side colourbars dynamically directly under each pitch
+    fig.canvas.draw()
+    p1 = ax1.get_position()
+    p2 = ax2.get_position()
 
-    cax.imshow(img, extent=[0, vmax * 100, 0, 2], aspect="auto")
-    cax.set_yticks([0.5, 1.5])
-    cax.set_yticklabels(["Athletic Club", "Barcelona"], fontsize=8.5, color=Palette.TEXT_COLOR)
-    cax.set_xlabel("share of visible-ball possession frames (%)", fontsize=9, color=Palette.TEXT_COLOR)
-    cax.tick_params(left=False, labelsize=8.5)
-    for spine in cax.spines.values():
-        spine.set_color("#cccccc")
-        spine.set_linewidth(0.8)
-    cax.set_position([0.30, 0.08, 0.40, 0.05])
+    cbar_h = 0.03
+    cbar_w = p1.width * 0.82
+    cbar_x1 = p1.x0 + (p1.width - cbar_w) / 2
+    cbar_x2 = p2.x0 + (p2.width - cbar_w) / 2
+    cbar_y = max(p1.y0 - 0.08, 0.03)
+
+    cax1 = fig.add_axes([cbar_x1, cbar_y, cbar_w, cbar_h])
+    cax2 = fig.add_axes([cbar_x2, cbar_y, cbar_w, cbar_h])
+
+    vals = np.linspace(0, vmax, 256).reshape(1, -1)
+    cax1.imshow(vals, cmap=Palette.CMAP_HOME, extent=[0, vmax * 100, 0, 1], aspect="auto", vmin=0, vmax=vmax)
+    cax2.imshow(vals, cmap=Palette.CMAP_AWAY, extent=[0, vmax * 100, 0, 1], aspect="auto", vmin=0, vmax=vmax)
+
+    for cax, name in [(cax1, home_name), (cax2, away_name)]:
+        cax.set_yticks([])
+        cax.set_xlabel(f"{name} — share of visible possession (%)", fontsize=8.0, color=Palette.TEXT_COLOR)
+        cax.tick_params(labelsize=7.5)
+        for sp in cax.spines.values():
+            sp.set_color("#cccccc")
+            sp.set_linewidth(0.8)
 
     target_path = out_png
     if os.path.isdir(target_path) or not target_path.lower().endswith(".png"):
@@ -387,6 +420,8 @@ def make_timeline(csv, out_png, trk=None, data_dir=None, dpi=200, figsize=(12.0,
 
     if trk is None:
         trk = tracking.from_atd(data_dir=data_dir)
+
+    home_name, away_name = get_team_names(trk=trk, data_dir=data_dir)
 
     fps = trk.get("fps", 25)
     blocks = trk.get("blocks", [(1, 0, len(labels) - 1)])
@@ -436,8 +471,8 @@ def make_timeline(csv, out_png, trk=None, data_dir=None, dpi=200, figsize=(12.0,
 
     # Legend at top
     patches = [
-        mpatches.Patch(color=Palette.STRIP_H, label="Barcelona (Home)"),
-        mpatches.Patch(color=Palette.STRIP_A, label="Athletic Club (Away)"),
+        mpatches.Patch(color=Palette.STRIP_H, label=f"{home_name} (Home)"),
+        mpatches.Patch(color=Palette.STRIP_A, label=f"{away_name} (Away)"),
         mpatches.Patch(color=Palette.STRIP_D, label="Dead ball (stoppage)"),
     ]
     fig.legend(handles=patches, loc="upper center", bbox_to_anchor=(0.51, 0.98),
@@ -451,8 +486,8 @@ def make_timeline(csv, out_png, trk=None, data_dir=None, dpi=200, figsize=(12.0,
     h_vals = [h_def * 100.0, h_mid * 100.0, h_att * 100.0]
     a_vals = [a_def * 100.0, a_mid * 100.0, a_att * 100.0]
 
-    rects1 = ax_bar.bar(x - bar_width / 2, h_vals, bar_width, label="Barcelona", color=Palette.STRIP_H)
-    rects2 = ax_bar.bar(x + bar_width / 2, a_vals, bar_width, label="Athletic Club", color=Palette.STRIP_A)
+    rects1 = ax_bar.bar(x - bar_width / 2, h_vals, bar_width, label=home_name, color=Palette.STRIP_H)
+    rects2 = ax_bar.bar(x + bar_width / 2, a_vals, bar_width, label=away_name, color=Palette.STRIP_A)
 
     for rect in rects1:
         h = rect.get_height()
@@ -508,7 +543,7 @@ def main():
         return
 
     parsed_size = parse_size(args.size)
-    hm_size = parsed_size if parsed_size is not None else (13.0, 6.2)
+    hm_size = parsed_size if parsed_size is not None else (13.0, 5.5)
     tl_size = parsed_size if parsed_size is not None else (12.0, 5.8)
 
     out_heatmap = args.out

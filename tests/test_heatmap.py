@@ -12,6 +12,7 @@ from analysis.heatmap import (
     CAPTION,
     Palette,
     draw_pitch,
+    get_team_names,
     make_heatmap,
     make_timeline,
     parse_size,
@@ -246,11 +247,61 @@ def test_caption_honest_content(capsys):
     assert "59.3%" in CAPTION
     assert "visible-ball" in CAPTION
     assert "labels are the submission's, not ground truth" in CAPTION
+    assert "490 frames" in CAPTION
+    assert "excluded" in CAPTION
     print_caption()
     captured = capsys.readouterr().out
     assert "59.3%" in captured
     assert "visible-ball" in captured
     assert "labels are the submission's, not ground truth" in captured
+    assert "490 frames" in captured
+    assert "excluded" in captured
+
+
+def test_possession_density_out_of_pitch_excluded():
+    """Frames where the visible ball lies outside pitch lines are dropped rather than clipped."""
+    n = 100
+    length, width = 105.3, 68.0
+    px = np.zeros((n, 2))
+    px[:, 0] = 40.0
+    px[:, 1] = 65.0
+
+    bx = np.full(n, 25.0)
+    by = np.full(n, 34.0)
+    # Put 40 frames outside pitch lines: 20 above top touchline, 20 beyond left goal line
+    by[60:80] = 75.0
+    bx[80:] = -5.0
+
+    trk = {
+        "pitch": (length, width),
+        "bx": bx,
+        "by": by,
+        "px": px,
+        "team": np.array([0, 1]),
+        "blocks": [(1, 0, n - 1)],
+    }
+    labels = np.full(n, "H")
+    density = possession_density(trk, labels, "H")
+
+    assert density.shape == (21, 14)
+    assert np.isclose(density.sum(), 1.0)
+
+    # Valid in-pitch points are at (25.0, 34.0). Top row (y=13) and left edge (x=0) should not have clipped peaks.
+    expected_ix = int(25.0 / length * 21)
+    expected_iy = int(34.0 / width * 14)
+    peak_ix, peak_iy = np.unravel_index(density.argmax(), density.shape)
+    assert (peak_ix, peak_iy) == (expected_ix, expected_iy)
+    # The top edge (y=13) is far from y=34, so density must be negligible (< 0.001) rather than peak
+    assert density[:, 13].max() < 0.001
+
+
+def test_get_team_names():
+    # From trk override
+    trk = {"team_names": ("HomeFC", "AwayFC")}
+    assert get_team_names(trk=trk) == ("HomeFC", "AwayFC")
+
+    # Fallback when metadata not found
+    assert get_team_names(data_dir="nonexistent_dir_12345") == ("Barcelona", "Atletic Club")
 
 
 def test_determinism_synthetic(tmp_path, monkeypatch):
