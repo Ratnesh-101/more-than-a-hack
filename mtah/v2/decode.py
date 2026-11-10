@@ -76,6 +76,18 @@ def kickoff_frame(trk, half):
     return (trk.get("kickoffs") or {}).get(half)
 
 
+def _label_evidence_free_islands_dead(labels, bx):
+    """Maximal H or A runs bounded by D on both sides with zero ball sightings become D."""
+    if len(labels) == 0 or bx is None or len(bx) != len(labels):
+        return labels
+    cut = np.concatenate(([0], np.flatnonzero(labels[1:] != labels[:-1]) + 1, [len(labels)]))
+    for s, e in zip(cut[:-1], cut[1:]):
+        if labels[s] in ("H", "A") and s > 0 and e < len(labels):
+            if labels[s - 1] == "D" and labels[e] == "D" and np.isnan(bx[s:e]).all():
+                labels[s:e] = "D"
+    return labels
+
+
 def decode_half(trk, half, lo, hi, decode_segment):
     """Labels for one graded half [lo, hi]: D before that half's kickoff, decoded after."""
     kick = kickoff_frame(trk, half)
@@ -85,6 +97,10 @@ def decode_half(trk, half, lo, hi, decode_segment):
         labels[:start - lo] = "D"
     if start <= hi:
         labels[start - lo:] = decode_segment(start, hi)
+    bx = trk.get("bx")
+    if bx is not None:
+        half_bx = bx[lo:hi + 1] if len(bx) >= hi + 1 else (bx if len(bx) == len(labels) else None)
+        _label_evidence_free_islands_dead(labels, half_bx)
     return labels
 
 

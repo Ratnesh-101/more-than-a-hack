@@ -13,7 +13,7 @@ from mtah.experiments import cand_02_touch_events as c02
 from mtah.experiments import stack_1_touch_semimarkov as stack1
 from mtah.experiments.court import run as court
 from mtah.experiments.court import synth
-from mtah.v2 import fallback, tracking
+from mtah.v2 import decode, fallback, tracking
 
 N_TILED = 199319
 TILED_BLOCKS = [(1, 2000, 2000 + 79000 - 1), (2, 100000, 100000 + 79857 - 1)]
@@ -24,6 +24,9 @@ def check_seed(seed):
     trk, _ = synth.make(seed, 20, "realistic")
     old = {"touch_only": court.run_candidate(c02, trk)[0],
            "semi_markov": court.run_candidate(stack1, trk)[0]}
+    for k in old:
+        for _, lo, hi in trk["blocks"]:
+            decode._label_evidence_free_islands_dead(old[k][lo:hi + 1], trk["bx"][lo:hi + 1])
     e = fallback.emissions(trk)
     assert np.allclose(e, c02.emissions(trk), rtol=0, atol=1e-9), "emissions differ, seed %d" % seed
     assert not np.isnan(e).any() and not (e == np.inf).any(), "NaN/+inf, seed %d" % seed
