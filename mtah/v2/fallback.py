@@ -305,6 +305,7 @@ def _refine(e, cut, a, b, lo, hi):
 def _semi_markov_block(e, fps):
     """H/A/D letters for one contiguous block of emissions e (n, 3)."""
     n = len(e)
+    e = np.maximum(e, -1e9)
     m = -(-n // CELL)
     pad = np.zeros((m * CELL, 3))
     pad[:n] = e
