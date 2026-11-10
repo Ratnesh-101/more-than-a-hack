@@ -1,0 +1,51 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.8", "3.11"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+
+      - name: Run pytest
+        run: python -m pytest tests -q
+
+      - name: Run test_golden
+        run: python -m mtah.v2.tests.test_golden
+
+      - name: Run test_fallback
+        run: python -m mtah.v2.tests.test_fallback
+
+      - name: Run test_e2e
+        run: python -m mtah.v2.tests.test_e2e
+
+      - name: Run test_decode_exact
+        run: python -m mtah.v2.tests.test_decode_exact
+
+      - name: Run test_speed_guard
+        run: python -m mtah.v2.tests.test_speed_guard
+
+      - name: Run leak guard
+        run: python -m mtah.guard --tracked
+
+      - name: Synthetic end-to-end run (print CSV sha256)
+        run: python -m mtah.reproduce --team synthetic --synthetic

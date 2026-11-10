@@ -1,5 +1,12 @@
 # More than a Hack 2027 — Phase 1: Ball Possession
 
+```bash
+git clone https://github.com/Ratnesh-101/more-than-a-hack && cd more-than-a-hack
+pip install -r requirements.txt
+python -m mtah.reproduce --team nirakshak
+```
+*(Tested under Python 3.8 and 3.11 on Ubuntu and Windows)*
+
 **Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com)
 and the [Mobile World Capital Barcelona](https://www.mwcbarcelona.com)**, at the Talent Arena in Barcelona.
 
@@ -111,6 +118,15 @@ Full description of every asset and how the frames line up: **[DATA.md](DATA.md)
 
 From a clean clone to `submissions/nirakshak.csv`. Python 3.8 to 3.11. The method is described in
 [docs/TECHNICAL.md](docs/TECHNICAL.md); the pipeline is `mtah/v2/`.
+
+One-command reproduction:
+
+```bash
+python -m mtah.reproduce --team nirakshak
+```
+
+This runs `mtah.audit`, `mtah.run` (twice, confirming byte-identical determinism),
+`evaluation/validate_submission.py`, `analysis.real_checks`, and reports the final SHA-256 hash.
 
 **PowerShell**
 

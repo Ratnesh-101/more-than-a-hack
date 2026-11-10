@@ -6,5 +6,7 @@
 #
 # Optional tooling -- the ATD loader and anything that opens the video -- lives in
 # requirements-starter.txt.
+#
+# Verified: numpy==1.24.4 and pandas==2.0.3 resolve for Python 3.8 and 3.11 on Linux and Windows.
 numpy==1.24.4
 pandas==2.0.3
