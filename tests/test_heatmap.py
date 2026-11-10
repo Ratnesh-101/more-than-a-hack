@@ -1,5 +1,6 @@
 """Tests for analysis.heatmap."""
 
+import hashlib
 import os
 import matplotlib
 matplotlib.use("Agg")
@@ -8,12 +9,15 @@ import numpy as np
 import pytest
 
 from analysis.heatmap import (
+    CAPTION,
     Palette,
     draw_pitch,
     make_heatmap,
     make_timeline,
+    parse_size,
     possession_density,
     possession_thirds,
+    print_caption,
     timeline_bins,
 )
 
@@ -168,20 +172,16 @@ def test_make_heatmap_synthetic(tmp_path, monkeypatch):
 
 def test_timeline_bins_synthetic():
     """Test 1-second binning over synthetic label vector with X omitted."""
-    # 25 fps: 50 frames of H (2 s), 50 frames of A (2 s), 25 frames of D (1 s), 25 frames of X (1 s)
     fps = 25
     labels = np.array(["H"] * 50 + ["A"] * 50 + ["D"] * 25 + ["X"] * 25)
     bins = timeline_bins(labels, 0, len(labels) - 1, fps=fps)
-    # Expected: 2 bins of H (1), 2 bins of A (2), 1 bin of D (3), 1 bin of X (0)
     assert len(bins) == 6
     assert list(bins) == [1, 1, 2, 2, 3, 0]
 
 
 def test_timeline_bins_majority_voting():
     """Test modal selection within a 1-second bin."""
-    # 25 frames: 15 H, 5 A, 5 D -> should be H (1)
     chunk1 = ["H"] * 15 + ["A"] * 5 + ["D"] * 5
-    # 25 frames: 10 D, 5 H, 10 X -> D has most among (H,A,D) -> should be D (3)
     chunk2 = ["D"] * 10 + ["H"] * 5 + ["X"] * 10
     labels = np.array(chunk1 + chunk2)
     bins = timeline_bins(labels, 0, len(labels) - 1, fps=25)
@@ -193,11 +193,8 @@ def test_timeline_bins_majority_voting():
 def test_possession_thirds_synthetic():
     """Test pitch thirds calculation from synthetic 21x14 density array."""
     grid = np.zeros((21, 14), dtype=float)
-    # Defensive third: bins 0..6 (7 bins)
     grid[0:7, :] = 0.20 / (7 * 14)
-    # Middle third: bins 7..13 (7 bins)
     grid[7:14, :] = 0.50 / (7 * 14)
-    # Attacking third: bins 14..20 (7 bins)
     grid[14:21, :] = 0.30 / (7 * 14)
 
     assert np.isclose(grid.sum(), 1.0)
@@ -235,3 +232,57 @@ def test_make_timeline_synthetic(tmp_path):
     saved = make_timeline(csv_path, out_png, trk=synthetic_trk)
     assert os.path.isfile(saved)
     assert os.path.getsize(saved) > 1000
+
+
+def test_parse_size():
+    assert parse_size("13x6") == (13.0, 6.0)
+    assert parse_size("12.5,5.5") == (12.5, 5.5)
+    assert parse_size("10 4") == (10.0, 4.0)
+    assert parse_size(None) is None
+    assert parse_size("") is None
+
+
+def test_caption_honest_content(capsys):
+    assert "59.3%" in CAPTION
+    assert "visible-ball" in CAPTION
+    assert "labels are the submission's, not ground truth" in CAPTION
+    print_caption()
+    captured = capsys.readouterr().out
+    assert "59.3%" in captured
+    assert "visible-ball" in captured
+    assert "labels are the submission's, not ground truth" in captured
+
+
+def test_determinism_synthetic(tmp_path, monkeypatch):
+    """Identical synthetic inputs give identical PNG bytes across runs."""
+    n = 100
+    length, width = 105.3, 68.0
+    px = np.zeros((n, 2))
+    px[:, 0] = 45.0
+    px[:, 1] = 60.0
+    synthetic_trk = {
+        "pitch": (length, width),
+        "bx": np.linspace(10, 90, n),
+        "by": np.linspace(10, 50, n),
+        "px": px,
+        "team": np.array([0, 1]),
+        "blocks": [(1, 0, n - 1)],
+    }
+    monkeypatch.setattr("analysis.heatmap.tracking.from_atd", lambda data_dir=None: synthetic_trk)
+
+    csv_path = str(tmp_path / "det_sub.csv")
+    with open(csv_path, "w") as f:
+        f.write("frame,label\n")
+        for i in range(n):
+            lbl = "H" if i % 2 == 0 else "A"
+            f.write(f"{i},{lbl}\n")
+
+    p1 = str(tmp_path / "run1.png")
+    p2 = str(tmp_path / "run2.png")
+    make_heatmap(csv_path, p1, dpi=100, figsize=(8.0, 4.0))
+    make_heatmap(csv_path, p2, dpi=100, figsize=(8.0, 4.0))
+
+    b1 = open(p1, "rb").read()
+    b2 = open(p2, "rb").read()
+    assert b1 == b2
+    assert hashlib.sha256(b1).hexdigest() == hashlib.sha256(b2).hexdigest()

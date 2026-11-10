@@ -1,4 +1,13 @@
-"""Pitch drawing helpers, colour palettes, and possession visualizations."""
+"""Pitch drawing helpers, colour palettes, and possession visualizations.
+
+Caption for publication document:
+Possession density and match timeline for FC Barcelona vs Athletic Club, derived from
+the submission's labels rather than ground truth. The ball is visible on 59.3% of graded frames
+(94,214 of 158,857 frames), so densities describe visible-ball frames only; labels are the
+submission's, not ground truth. Attacking direction is normalised left to right for each team
+across both halves. Each team's spatial density is normalised to its own total visible possession
+frames so panels share an identical colour scale, smoothed with a normalised Gaussian kernel.
+"""
 
 import argparse
 import os
@@ -6,6 +15,10 @@ import sys
 
 import matplotlib
 matplotlib.use("Agg")
+matplotlib.rcParams["svg.fonttype"] = "none"
+matplotlib.rcParams["font.family"] = "sans-serif"
+matplotlib.rcParams["font.sans-serif"] = ["DejaVu Sans", "Arial"]
+
 import matplotlib.colors as mcolors
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -13,6 +26,17 @@ import numpy as np
 import pandas as pd
 
 from mtah.v2 import tracking
+
+SAVEFIG_METADATA = {"Software": None, "Creation Time": None, "Date": None}
+
+CAPTION = (
+    "Possession density and match timeline for FC Barcelona vs Athletic Club, derived from "
+    "the submission's labels rather than ground truth. The ball is visible on 59.3% of graded frames "
+    "(94,214 of 158,857 frames), so densities describe visible-ball frames only; labels are the "
+    "submission's, not ground truth. Attacking direction is normalised left to right for each team "
+    "across both halves. Each team's spatial density is normalised to its own total visible possession "
+    "frames so panels share an identical colour scale, smoothed with a normalised Gaussian kernel."
+)
 
 
 class Palette:
@@ -34,6 +58,31 @@ class Palette:
     STRIP_A = "#e34a33"
     STRIP_D = "#969696"
     STRIP_COLORS = {"H": STRIP_H, "A": STRIP_A, "D": STRIP_D}
+
+
+def print_caption():
+    """Print a one-paragraph caption for the document.
+
+    The ball is visible on 59.3% of graded frames, so densities describe visible-ball
+    frames only; labels are the submission's, not ground truth. Attacking direction is
+    normalised left to right for both teams, and densities reflect each team's own share of
+    visible possession frames across a 21x14 grid.
+    """
+    print(CAPTION)
+
+
+def parse_size(size_str):
+    """Parse figure size string into (width, height) float tuple, e.g. '13x6' or '13,6'."""
+    if not size_str:
+        return None
+    cleaned = size_str.strip().lower()
+    if "x" in cleaned:
+        parts = cleaned.split("x")
+    elif "," in cleaned:
+        parts = cleaned.split(",")
+    else:
+        parts = cleaned.split()
+    return float(parts[0]), float(parts[1])
 
 
 def draw_pitch(ax, length=105.3, width=68.0, color=None, lw=None):
@@ -321,7 +370,7 @@ def make_heatmap(csv, out_png, data_dir=None, dpi=200, figsize=(13.0, 6.2)):
     else:
         os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
 
-    fig.savefig(target_path, dpi=dpi, metadata={"Software": None, "Creation Time": None, "Date": None})
+    fig.savefig(target_path, dpi=dpi, metadata=SAVEFIG_METADATA)
     plt.close(fig)
     return target_path
 
@@ -439,7 +488,7 @@ def make_timeline(csv, out_png, trk=None, data_dir=None, dpi=200, figsize=(12.0,
     else:
         os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
 
-    fig.savefig(target_path, dpi=dpi, metadata={"Software": None, "Creation Time": None, "Date": None})
+    fig.savefig(target_path, dpi=dpi, metadata=SAVEFIG_METADATA)
     plt.close(fig)
     return target_path
 
@@ -449,7 +498,18 @@ def main():
     parser.add_argument("--csv", default="submissions/nirakshak.csv", help="Submission CSV path")
     parser.add_argument("--out", default="docs/out/figures", help="Output directory or file path")
     parser.add_argument("--data-dir", default=None, help="Gated match data directory")
+    parser.add_argument("--dpi", type=int, default=200, help="Output image DPI (default: 200)")
+    parser.add_argument("--size", default=None, help="Figure size as WxH or W,H in inches (e.g. 13x6)")
+    parser.add_argument("--caption", action="store_true", help="Print the document caption paragraph")
     args = parser.parse_args()
+
+    if args.caption:
+        print_caption()
+        return
+
+    parsed_size = parse_size(args.size)
+    hm_size = parsed_size if parsed_size is not None else (13.0, 6.2)
+    tl_size = parsed_size if parsed_size is not None else (12.0, 5.8)
 
     out_heatmap = args.out
     out_timeline = args.out
@@ -457,10 +517,11 @@ def main():
         base, ext = os.path.splitext(args.out)
         out_timeline = "{}_timeline{}".format(base, ext)
 
-    saved_heatmap = make_heatmap(args.csv, out_heatmap, data_dir=args.data_dir)
-    saved_timeline = make_timeline(args.csv, out_timeline, data_dir=args.data_dir)
+    saved_heatmap = make_heatmap(args.csv, out_heatmap, data_dir=args.data_dir, dpi=args.dpi, figsize=hm_size)
+    saved_timeline = make_timeline(args.csv, out_timeline, data_dir=args.data_dir, dpi=args.dpi, figsize=tl_size)
     print("Saved heatmap to {}".format(saved_heatmap))
     print("Saved timeline to {}".format(saved_timeline))
+    print("\nCaption:\n{}".format(CAPTION))
 
 
 if __name__ == "__main__":
