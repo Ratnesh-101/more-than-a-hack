@@ -27,8 +27,9 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "starter"))
 from analysis.unlabeled_stats import valley  # noqa: E402
-from mtah.v2 import tracking  # noqa: E402  (the stamped cache the submission itself uses)
+from mtah.v2 import touch, tracking  # noqa: E402  (the stamped cache the submission itself uses)
 
 WALK_MPS = 2.0          # a slot walks below this speed (WALK_MPS of cand_08)
 WALK_SHARE = 0.9        # a frame is "all walking" when this share of known-team slots walks
@@ -197,6 +198,9 @@ def tracking_checks(tab, trk, labels):
     if d_frames.any():
         miss = float(np.mean(~np.isfinite(trk["bx"][d_frames])))
         tab.warn("ball", "ball missing in D frames", miss, miss > MISSING_WARN, "<= {:g}".format(MISSING_WARN))
+    roughness = ball_roughness_stats(trk["bx"], trk["by"], blocks)
+    tab.info("ball", "roughness x m median / p99", "{:.3f} / {:.3f}".format(*roughness["x"]))
+    tab.info("ball", "roughness y m median / p99", "{:.3f} / {:.3f}".format(*roughness["y"]))
 
 
 def visibility_checks(tab, trk):
@@ -246,6 +250,193 @@ def team_balance(tab, labels, blocks, fps):
                  "<= {:g}".format(ONE_TEAM_WARN))
 
 
+def second_differences_1d(z, blocks=None):
+    """Absolute second differences |z[t+2] - 2*z[t+1] + z[t]| from consecutive-visible triples."""
+    if blocks is None:
+        segments = [z]
+    else:
+        segments = [z[lo:hi + 1] for _, lo, hi in blocks]
+    diffs = []
+    for seg in segments:
+        if len(seg) < 3:
+            continue
+        d2 = seg[2:] - 2.0 * seg[1:-1] + seg[:-2]
+        ok = np.isfinite(d2)
+        if ok.any():
+            diffs.append(np.abs(d2[ok]))
+    return np.concatenate(diffs) if diffs else np.empty(0, dtype=np.float64)
+
+
+def ball_roughness_stats(bx, by, blocks=None):
+    """Median and p99 of absolute second differences for bx and by in metres."""
+    out = {}
+    for axis, arr in (("x", bx), ("y", by)):
+        d2 = second_differences_1d(arr, blocks)
+        if len(d2):
+            out[axis] = (float(np.median(d2)), float(np.percentile(d2, 99)))
+        else:
+            out[axis] = (0.0, 0.0)
+    return out
+
+
+def kick_enrichment(trk, thresholds=(3.0, 5.0, 8.0)):
+    """Kick velocity-change event rates and player-proximity shares inside blocks.
+
+    Reads event definitions and constants from mtah.v2.touch.
+    """
+    fps = trk["fps"]
+    bx, by = trk["bx"].astype(np.float64), trk["by"].astype(np.float64)
+    vis = np.isfinite(bx) & np.isfinite(by)
+    with np.errstate(invalid="ignore"):
+        jump = np.hypot(np.diff(bx), np.diff(by)) * fps > touch.V_MAX
+    good = vis.copy()
+    good[1:] &= ~jump
+    good[:-1] &= ~jump
+    within_k = touch._all_within(good, touch.K)
+
+    blocks = trk.get("blocks") or [(1, 0, len(bx) - 1)]
+    inside = np.zeros(len(bx), dtype=bool)
+    for _, lo, hi in blocks:
+        inside[lo:hi + 1] = True
+
+    usable = within_k & inside
+    usable_minutes = float(usable.sum()) / (float(fps) * 60.0)
+
+    vx_b, vx_f = touch._slope(bx, good)
+    vy_b, vy_f = touch._slope(by, good)
+    dv = np.where(usable, np.hypot(vx_f - vx_b, vy_f - vy_b) * fps, 0.0)
+    prev = np.concatenate([[0.0], dv[:-1]])
+    nxt = np.concatenate([dv[1:], [0.0]])
+
+    d_h, d_a = (np.where(vis, d, np.inf) for d in touch._team_dist(trk))
+    near = np.minimum(d_h, d_a)
+    player_near = near < touch.R_KICK
+    baseline_share = float(np.mean(player_near[usable])) if usable.any() else 0.0
+
+    rows = []
+    for thresh in thresholds:
+        ev = (dv > thresh) & (dv >= prev) & (dv > nxt) & inside
+        count = int(ev.sum())
+        per_min = count / usable_minutes if usable_minutes > 0 else 0.0
+        near_share = float(np.mean(player_near[ev])) if count > 0 else 0.0
+        rows.append({
+            "thresh": thresh,
+            "count": count,
+            "per_min": per_min,
+            "near_share": near_share,
+        })
+    return {
+        "usable_minutes": usable_minutes,
+        "baseline_share": baseline_share,
+        "rows": rows,
+    }
+
+
+def kick_checks(tab, trk):
+    """Kick enrichment table: rate and player proximity across DV_KICK thresholds."""
+    res = kick_enrichment(trk)
+    base = res["baseline_share"]
+    tab.info("kick", "player within 2 m (all usable frames)", "{:.3f}".format(base))
+    for row in res["rows"]:
+        tab.info(
+            "kick",
+            "DV_KICK {:g} m/s (/min, near share vs all)".format(row["thresh"]),
+            "{:.2f} /min, {:.3f} vs {:.3f}".format(row["per_min"], row["near_share"], base),
+        )
+
+
+def team_tag_to_side(team_str):
+    """Map a Smart Tagging Team string to 'H' or 'A'."""
+    if not team_str:
+        return None
+    s = str(team_str).strip().lower()
+    if "barcelona" in s or s in ("h", "home"):
+        return "H"
+    if "atletic" in s or "athletic" in s or s in ("a", "away"):
+        return "A"
+    return None
+
+
+def check_half_kickoff_alternation(labels, events):
+    """First live label (H or A) after the kickoff of each half; returns (letters, alternates)."""
+    if not events:
+        return [], False
+    start_tags = [
+        e for e in events
+        if (e.get("code") or "").strip().lower() == "set pieces"
+        and (e.get("tags", {}).get("Type") or "").strip().lower() == "kick off (start)"
+    ]
+    start_tags.sort(key=lambda e: e.get("start_frame", 0))
+    letters = []
+    for tag in start_tags:
+        sf = tag.get("start_frame", 0)
+        sub = labels[sf:]
+        live = sub[np.isin(sub, ("H", "A"))]
+        letters.append(str(live[0]) if len(live) else "none")
+    alternates = (
+        len(letters) == 2
+        and letters[0] in ("H", "A")
+        and letters[1] in ("H", "A")
+        and letters[0] != letters[1]
+    )
+    return letters, alternates
+
+
+def check_goal_kickoffs(labels, events):
+    """For each GOALS tag, verify the first live label after following kickoff is opposite team."""
+    if not events:
+        return 0, 0
+    goals = [e for e in events if (e.get("code") or "").strip().lower() == "goals"]
+    kickoffs = [
+        e for e in events
+        if (e.get("code") or "").strip().lower() == "set pieces"
+        and "kick off" in (e.get("tags", {}).get("Type") or "").strip().lower()
+    ]
+    holds = 0
+    total = len(goals)
+    for g in goals:
+        scorer = team_tag_to_side(g.get("tags", {}).get("Team"))
+        if scorer is None:
+            continue
+        expected = "A" if scorer == "H" else "H"
+        after_kos = [k for k in kickoffs if k.get("start_frame", 0) >= g.get("start_frame", 0)]
+        if not after_kos:
+            continue
+        ko = after_kos[0]
+        sub = labels[ko.get("start_frame", 0):]
+        live = sub[np.isin(sub, ("H", "A"))]
+        first_live = str(live[0]) if len(live) else None
+        if first_live == expected:
+            holds += 1
+    return holds, total
+
+
+def kickoff_checks(tab, labels, events):
+    """Kickoff-side checks from Smart Tagging and the submission CSV."""
+    if not events:
+        tab.info("kickoff", "half 1/2 first live label alternates", "skipped (no Smart Tagging)")
+        tab.info("kickoff", "post-goal kickoff side opposite to scorer", "skipped (no Smart Tagging)")
+        return
+    letters, alternates = check_half_kickoff_alternation(labels, events)
+    if len(letters) == 2:
+        val = "{}, {} ({})".format(letters[0], letters[1], "alternates" if alternates else "no alternation")
+    else:
+        val = " / ".join(letters) if letters else "none"
+    tab.info("kickoff", "half 1/2 first live label alternates", val)
+
+    holds, total = check_goal_kickoffs(labels, events)
+    tab.info("kickoff", "post-goal kickoff side opposite to scorer", "{}/{} holds".format(holds, total))
+
+
+def load_smart_tagging_events():
+    """Load Smart Tagging events if available, else return None."""
+    try:
+        import load_smart_tagging as st
+        return st.load()
+    except Exception:
+        return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="Unlabeled real-data acceptance gate for a possession CSV.")
     ap.add_argument("--csv", required=True, help="submission frame,label CSV to check")
@@ -282,6 +473,9 @@ def main():
     visibility_checks(tab, trk)
     speed_unit_check(tab, trk)
     team_balance(tab, labels, blocks, fps)
+    kick_checks(tab, trk)
+    st_events = load_smart_tagging_events() if args.synthetic_demo is None else None
+    kickoff_checks(tab, labels, st_events)
 
     tab.print()
     out = os.path.join(ROOT, "analysis", "out")
