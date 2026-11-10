@@ -2,8 +2,9 @@
 
     python -m mtah.v2.run --team TEAMNAME            # stream/cached tracking, write submission
     python -m mtah.v2.run --team TEAMNAME --refresh  # rebuild the tracking cache
+    python -m mtah.v2.run --team TEAMNAME --variant semi_markov  # shipped default (stack_1)
+    python -m mtah.v2.run --team TEAMNAME --variant champion     # alternative: stack_2 (min-stoppage Viterbi)
     python -m mtah.v2.run --team TEAMNAME --variant touch_only   # fallback: candidate 02 alone
-    python -m mtah.v2.run --team TEAMNAME --variant semi_markov  # fallback: stack_1 (02 + cand 12)
     python -m mtah.v2.run --team TEAMNAME --data-dir D --out OTHER_FOLDER
     python evaluation/validate_submission.py submissions/TEAMNAME.csv
 
@@ -66,8 +67,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--team", required=True, help="exact team name used at registration")
     ap.add_argument("--refresh", action="store_true")
-    ap.add_argument("--variant", choices=("champion",) + fallback.VARIANTS, default="champion",
-                    help="champion (default) or a fallback if real data kills its dead-ball premise")
+    ap.add_argument("--variant", choices=("semi_markov", "champion", "touch_only"), default="semi_markov",
+                    help="semi_markov (default), champion (alternative), or touch_only fallback")
     ap.add_argument("--data-dir", default=None)
     ap.add_argument("--out", default=os.path.join(ROOT, "submissions"),
                     help="folder for <team>.csv (default: submissions/)")

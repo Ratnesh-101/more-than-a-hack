@@ -1,19 +1,21 @@
 # Technical document: team nirakshak, More Than a Hack 2027, Phase 1 (ball possession)
 
-Status: DRAFT for the champion design in `mtah/v2/`. No real-data result exists yet; every missing number is `TODO(result)`. Every number labelled "synthetic" comes from our own synthetic match generator, not from the provided game. Code references are `file:function` (no match data is in the repository).
+Status: DRAFT for the semi-Markov design in `mtah/v2/`. No real-data result exists yet; every missing number is `TODO(result)`. Every number labelled "synthetic" comes from our own synthetic match generator, not from the provided game. Code references are `file:function` (no match data is in the repository).
 
 ## 1. Approach
 
 For each of the 199,319 tactical frames the pipeline writes `H`, `A`, `D` or `X`:
 
-`raw tactical ATD` -> `Trk` arrays (`mtah/v2/tracking.py:from_atd`) -> touches and team log-odds (`touch.py:team_logodds`) -> dead-ball logit (`deadball.py:dead_logit`) -> 3-state emissions (`decode.py:emissions`) -> Viterbi with a hard 3 s minimum stoppage, switch cost 30, dead cost 12 (`decode.py:_viterbi_min_dead`) -> `X` outside the two graded halves (`decode.py:decode`; blocks 11185-90651 and 110808-190197 from `games.py:half_video_blocks`).
+The shipped decoder is now `semi_markov` (`mtah/v2/fallback.py:_decode_semi_markov`); the former champion, the minimum-stoppage Viterbi (`decode.py:_viterbi_min_dead`), is the alternative (`--variant champion`). The choice was made on unlabeled structure evidence: 28 of 44 champion possessions under 3 s were live islands between dead runs and 11 were flip-and-flip-back deflections, while semi_markov has share under 3 s 0.07 vs 0.16, and never on the public scoreboard.
+
+Pipeline: `raw tactical ATD` -> `Trk` arrays (`mtah/v2/tracking.py:from_atd`) -> touches and team log-odds (`touch.py:team_logodds`) -> emissions (`fallback.py:emissions` for semi_markov / `decode.py:emissions` for champion) -> semi-Markov segment DP (`fallback.py:_decode_semi_markov`) / minimum-stoppage Viterbi (`decode.py:_viterbi_min_dead`) -> `X` outside the two graded halves (`decode.py:decode_half`; blocks 11185-90651 and 110808-190197 from `games.py:half_video_blocks`).
 
 - **Tracking** (`tracking.py:_stream`): player x, y (scaled to metres by the 105.3 x 68.0 m pitch), player speed, team of each of the 46 slots (`starter/baseline.py:team_of_each_track`, first listed team = home) and the ball.
 - **Team evidence** (`touch.py`): possession is the team of the last credible touch. A touch is a kick (ball velocity changes by more than 5 m/s at a player) or a carry (ball within 1.5 m of one team and clearly nearer it, for 1 s). The H-vs-A log-odds `r` is the clipped difference "time since the last A touch" minus "time since the last H touch" in seconds, so it is constant through ball-missing gaps and loose balls and near zero when both teams touch in turn.
-- **Dead ball** (`deadball.py`): a sum of football cues (most players walking, ball beyond the lines, ball still on a restart spot, kickoff geometry, minus cues for sprinting and passing). Emissions are `[log P(H) + log(1-p), log P(A) + log(1-p), log p]` with `p` the dead probability, so D never carries a team.
-- **Decoder** (`decode.py`): exact Viterbi over H, A, D per half in which every dead run lasts at least 3 s.
+- **Dead ball** (`deadball.py` / `fallback.py`): a sum of football cues (most players walking, ball beyond the lines, ball still on a restart spot, kickoff geometry, minus cues for sprinting and passing). Emissions are `[log P(H) + log(1-p), log P(A) + log(1-p), log p]` with `p` the dead probability, so D never carries a team.
+- **Decoder** (`fallback.py:_decode_semi_markov`): segment-level (hidden semi-Markov) decoder with explicit duration modeling (shipped default). The former champion, the minimum-stoppage Viterbi (`decode.py:_viterbi_min_dead`), is the documented alternative (`--variant champion`).
 
-Why: `spellF1` scores whole possessions matched by IoU (EVALUATION.md). Per-frame nearest-player labels flicker through scrambles and deflections and invent short possessions. Touch evidence plus a switch cost makes a team change only after sustained touching.
+Why: `spellF1` scores whole possessions matched by IoU (EVALUATION.md). Per-frame nearest-player labels flicker through scrambles and deflections and invent short possessions. Touch evidence plus duration modeling / switch costs makes a team change only after sustained touching.
 
 ## 2. Possession rules implemented
 
@@ -79,9 +81,9 @@ Every constant in `touch.py`, `deadball.py`, `decode.py`. "Reason" is what the b
 
 ## 5. Development process
 
-- Twelve candidate designs were built independently against one shared synthetic harness (`mtah/experiments/court/`, briefs in `mtah/experiments/briefs/`) and compared on synthetic hidden seeds 101-110 (20 min each, decision rule fixed beforehand, `VERDICT.md`). The experiments are kept as frozen evidence.
+- Twelve candidate designs were built independently against one shared synthetic harness (`mtah/experiments/court/`, briefs in `mtah/experiments/briefs/`) and compared on synthetic hidden seeds 101-110 (20 min each, decision rule fixed beforehand, `mtah/experiments/briefs/VERDICT.md`). The experiments are kept as frozen evidence.
 - Champion: touch-event team evidence (02) + multi-cue dead ball and minimum-stoppage decoder (08). Synthetic spellF1 0.648 against 0.464 for the v1 nearest-player baseline: paired mean +0.184 (bootstrap 95% CI +0.158 to +0.209), ahead on 10/10 seeds. Synthetic only.
-- Dropped, one line each (synthetic, `VERDICT.md`): pass-chain confirmation (03: 0.588, below touch events); local superiority/density (07: wrong-signed, near ties v1, since defenders outnumber the attacker near the ball); pitch-control intercept time (11: no spellF1 gain, CI includes 0); team shape (06: 0.511, weak); territory (09: 0.537, weights fitted on pseudo-labels from the match's own nearest-player frames); ball reconstruction (05: stacked on the champion +0.007, CI includes 0); movement (10) and dwell time (04): below touch events; semi-Markov decoder (12) as a layer: stack 0.640 vs 0.648, so the min-stoppage decoder won; incumbent-plus (01): CI includes 0.
+- Dropped, one line each (synthetic, `mtah/experiments/briefs/VERDICT.md`): pass-chain confirmation (03: 0.588, below touch events); local superiority/density (07: wrong-signed, near ties v1, since defenders outnumber the attacker near the ball); pitch-control intercept time (11: no spellF1 gain, CI includes 0); team shape (06: 0.511, weak); territory (09: 0.537, weights fitted on pseudo-labels from the match's own nearest-player frames); ball reconstruction (05: stacked on the champion +0.007, CI includes 0); movement (10) and dwell time (04): below touch events; semi-Markov decoder (12) as a layer: stack 0.640 vs 0.648, so the min-stoppage decoder won; incumbent-plus (01): CI includes 0.
 - Dead-ball (08) alone and decoder (12) alone are not significant on hidden seeds; both pay off only on top of touch-event team evidence.
 - **Real-data performance is unmeasured until the real run.** Section 8 is empty until then.
 
@@ -118,12 +120,12 @@ python -m analysis.preflight --team nirakshak                    # final checkli
 ```
 
 - The first run streams the raw ATD once (about 2 minutes, quoted from the `tracking.py` docstring, not measured) and caches the tracking under `data/cache/`. The cache carries a version and code-hash stamp (`tracking.py:cache_stamp`) and is recomputed when it does not match; `--refresh` forces a rebuild.
-- Fallbacks: `mtah.run` delegates to `mtah.v2.run`, which has `--variant {champion,touch_only,semi_markov}` (default champion). `touch_only` is candidate 02 alone and `semi_markov` is the runner-up stack_1 (`mtah/v2/fallback.py`). They are pre-built and switched with `python -m mtah.run --team nirakshak --variant touch_only`. They are used only if the real-data acceptance gate (`analysis.real_checks`) fails the walking-share premise, a decision for the lead, never made from public-GT score.
+- Variants: `mtah.run` delegates to `mtah.v2.run`, which has `--variant {semi_markov,champion,touch_only}` (default `semi_markov`). The shipped decoder is now `semi_markov`; the former champion, the minimum-stoppage Viterbi, is the alternative (`--variant champion`). The choice was made on unlabeled structure evidence: 28 of 44 champion possessions under 3 s were live islands between dead runs and 11 were flip-and-flip-back deflections, while semi_markov has share under 3 s 0.07 vs 0.16, and never on the public scoreboard. The fallback command is `python -m mtah.run --team nirakshak --variant touch_only` (candidate 02 alone) and `--variant champion` is documented as the alternative. They are used only if the real-data acceptance gate (`analysis.real_checks`) fails the walking-share premise, a decision for the lead, never made from public-GT score.
 - Deterministic: no randomness in `mtah/v2/`, tie-breaks are fixed (`_viterbi_min_dead` keeps the current state), the file is written with `\n` newlines, and `run.py` prints a SHA-256 of the output. Golden test: `python -m mtah.v2.tests.test_golden` checks the port against the experiment on synthetic seeds 1-3 (emissions to 1e-9), determinism and a runtime limit.
 - Tests (all synthetic, no match data): `python -m mtah.v2.tests.test_golden`, `python -m mtah.v2.tests.test_fallback` (fallback variants equal their experiments), `python -m mtah.v2.tests.test_e2e` (synthetic bundle through the entry point and the official validator), `python -m mtah.v2.tests.test_robust` (about 1 min; 32 malformed or edge-case ATD cases: ball missing up to 100%, NaN speeds, one team untracked, gaps in the file, ball glitches, speed-unit probes), `python -m mtah.v2.tests.test_speed_guard` and `python -m pytest tests`. `python -m analysis.preflight --team nirakshak` is the last step before upload.
 - Speed-unit guard: `tracking.py:check_speed_unit` aborts every variant (exit 1, with a message) if the player speed field does not look like m/s (median below 0.3, or 95th percentile outside 2 to 15). It only catches gross unit errors.
 - `python -m mtah.guard` must pass before any push (blocks match data and derived exports).
-- `analysis.real_checks` implements the acceptance gates of `VERDICT.md` item 4 from unlabeled statistics only (possessions per half, mean duration 8-25 s, share under 3 s at most 0.10, flicker 0.5-3 per minute, D share, no half starting over 60 s in D). It never reads ground truth. It also reports ball-visibility run lengths, a speed-unit sanity row and a team-balance warning. Those gates are the lead's guesses, set before any real run, and are to be re-read against the real numbers.
+- `analysis.real_checks` implements the acceptance gates of `mtah/experiments/briefs/VERDICT.md` item 4 from unlabeled statistics only (possessions per half, mean duration 8-25 s, share under 3 s at most 0.10, flicker 0.5-3 per minute, D share, no half starting over 60 s in D). It never reads ground truth. It also reports ball-visibility run lengths, a speed-unit sanity row and a team-balance warning. Those gates are the lead's guesses, set before any real run, and are to be re-read against the real numbers.
 
 ## 8. Results (to be filled after the real run)
 
@@ -142,7 +144,7 @@ Nothing below has been measured on the provided game. Do not read the synthetic 
 
 ## Claims to verify
 
-1. All "synthetic" numbers (0.648, +0.184, 53 vs 67, plateaus, cliff values) are copied from `VERDICT.md` and the briefs, not re-run for this document.
+1. All "synthetic" numbers (0.648, +0.184, 53 vs 67, plateaus, cliff values) are copied from `mtah/experiments/briefs/VERDICT.md` and the briefs, not re-run for this document.
 2. "About 2 minutes" is quoted from the `tracking.py` docstring.
 3. "No `X` inside graded halves" is from reading `decode.py`; the real CSV has not been inspected.
 4. Home = first ATD team is an assumption from `starter/baseline.py` and DATA.md.

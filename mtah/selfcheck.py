@@ -6,7 +6,7 @@
 Builds a fake bundle in a temp dir with mtah.v2.tests.simbundle (22 players that move smoothly, a
 ball passed between them with ~35% of frames lost in occlusion runs, ~15 s possessions alternating
 H/A, 25% of spells stoppages) covering BOTH graded halves at the real 199,319-frame length, runs the
-champion chain (tracking.from_atd -> emissions -> decode -> write), validates the file with the
+shipped semi-Markov chain (tracking.from_atd -> fallback.decode -> write), validates the file with the
 official checker and asserts PLAUSIBILITY against the simulator's own truth:
 
   - file valid, 199,319 rows, X exactly outside the two graded blocks, only H/A/D inside;
@@ -32,7 +32,7 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from games import half_video_blocks  # noqa: E402
-from mtah.v2 import decode, tracking  # noqa: E402
+from mtah.v2 import fallback, tracking  # noqa: E402
 from mtah.v2 import run  # noqa: E402
 from mtah.v2.tests import simbundle  # noqa: E402
 
@@ -96,7 +96,7 @@ def main():
         trk = tracking.from_atd(data_dir=tmp)
         t_trk = time.perf_counter() - t0
         t0 = time.perf_counter()
-        labels = decode.decode(trk, decode.emissions(trk))
+        labels = fallback.decode(trk, "semi_markov")
         t_dec = time.perf_counter() - t0
         out = os.path.join(tmp, "selfcheck.csv")
         run.write(out, labels)
@@ -112,12 +112,11 @@ def main():
                       sim["dead_share"][half]))
         bad = plausibility(labels, trk["blocks"], sim["n_true"], sim["dead_share"])
         t0 = time.perf_counter()
-        again = decode.decode(*(lambda t: (t, decode.emissions(t)))(
-            tracking.from_atd(data_dir=tmp, refresh=True)))
+        again = fallback.decode(tracking.from_atd(data_dir=tmp, refresh=True), "semi_markov")
         if not np.array_equal(labels, again):
             bad.append("second run (re-parse) differs: not deterministic")
         t_again = time.perf_counter() - t0
-        print("build {:.1f}s, tracking.from_atd {:.1f}s, emissions+decode {:.2f}s, "
+        print("build {:.1f}s, tracking.from_atd {:.1f}s, decode {:.2f}s, "
               "second run {:.1f}s".format(t_sim, t_trk, t_dec, t_again))
         for b in bad:
             print("IMPLAUSIBLE:", b)

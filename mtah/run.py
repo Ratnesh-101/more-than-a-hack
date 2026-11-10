@@ -1,4 +1,4 @@
-"""Submission entry point: a thin delegate to the champion pipeline in mtah.v2.run.
+"""Submission entry point: a thin delegate to the pipeline in mtah.v2.run.
 
     python -m mtah.run --team TEAMNAME            # stream/cached tracking, write submission
     python -m mtah.run --team TEAMNAME --refresh  # rebuild the tracking cache

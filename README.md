@@ -152,11 +152,15 @@ python -m analysis.preflight --team nirakshak
   streams the raw tracking once (about 2 minutes, per the `mtah/v2/tracking.py` docstring) and
   caches it under `data/cache/`, which git ignores. The cache carries a version and code-hash stamp
   (`tracking.py:cache_stamp`) and is recomputed on mismatch; add `--refresh` to force a rebuild.
-- Fallbacks: `mtah.v2.run` has `--variant {champion,touch_only,semi_markov}` (default champion).
-  `touch_only` is candidate 02 alone, `semi_markov` is the runner-up stack_1. They are switched with
-  `python -m mtah.run --team nirakshak --variant touch_only` and are used only if the real-data
-  acceptance gate (`analysis.real_checks`) fails the walking-share premise, decided by the lead,
-  never from public-GT score.
+- Variants: `mtah.v2.run` has `--variant {semi_markov,champion,touch_only}` (default `semi_markov`).
+  The shipped decoder is now `semi_markov`; the former champion, the minimum-stoppage Viterbi, is
+  the alternative (`--variant champion`). The choice was made on unlabeled structure evidence: 28
+  of 44 champion possessions under 3 s were live islands between dead runs and 11 were flip-and-flip-back
+  deflections, while semi_markov has share under 3 s 0.07 vs 0.16, and never on the public scoreboard.
+  The fallback command is `python -m mtah.run --team nirakshak --variant touch_only` (candidate 02
+  alone) and `--variant champion` is documented as the alternative. They are used only if the
+  real-data acceptance gate (`analysis.real_checks`) fails the walking-share premise, decided by
+  the lead, never from public-GT score.
 - `analysis.real_checks` is the acceptance gate from unlabeled statistics only (possession count,
   durations, share under 3 s, flicker, dead-ball share). It never reads ground truth.
 - `mtah.guard` refuses a repository that contains match data, derived exports or secrets. Run it
@@ -164,13 +168,15 @@ python -m analysis.preflight --team nirakshak
 - The pipeline has no randomness: the same data gives a byte-identical CSV (`mtah.v2.run` prints
   its SHA-256). Golden test: `python -m mtah.v2.tests.test_golden` (synthetic data, no download).
 - `analysis.preflight` is the final pre-upload checklist (CSV, SHA-256, PDF, markers, repo hygiene).
-  Tests, with no match data: `python -m mtah.v2.tests.test_golden`, `test_fallback`, `test_e2e`,
-  `test_robust` (about 1 min, 32 edge-case ATD cases), `test_speed_guard` (same package) and
-  `python -m pytest tests`. `tracking.check_speed_unit` aborts every variant if the speed field does
-  not look like m/s; `real_checks` gates are the lead's guesses, to be re-read against real numbers.
-- Optional: `pip install -r requirements-analysis.txt`, then
-  `python -m analysis.diagnostics --check-alignment`, which compares letters with the public
-  5-minute ground truth to confirm frame indexing only. It is not used to tune anything.
+  Tests, with no match data: `python -m mtah.v2.tests.test_golden`,
+  `python -m mtah.v2.tests.test_fallback`, `python -m mtah.v2.tests.test_e2e`,
+  `python -m mtah.v2.tests.test_robust` (about 1 min, 32 edge-case ATD cases),
+  `python -m mtah.v2.tests.test_speed_guard` and `python -m pytest tests`.
+  `tracking.check_speed_unit` aborts every variant if the speed field does not look like m/s;
+  `real_checks` gates are the lead's guesses, to be re-read against real numbers.
+- `requirements-analysis.txt` / `requirements-docs.txt` are needed for diagnostics / PDF build
+  (`pip install -r requirements-analysis.txt` for `python -m analysis.diagnostics --check-alignment`;
+  `pip install -r requirements-docs.txt` for `python docs/build_pdf.py`).
 
 ---
 
@@ -228,6 +234,7 @@ machine, it scores the same way on ours.
 under 3.8 and 3.11 and produces identical output under both. `starter/baseline.py` needs nothing
 more either — you can reach a scored submission without installing anything else.
 
+`requirements-analysis.txt` / `requirements-docs.txt` are needed for diagnostics / PDF build.
 The notebooks additionally want `kloppy` and `matplotlib` (`requirements-starter.txt`), and
 **Python 3.9+ is recommended for those**: on Windows, installing Jupyter under 3.8 hits a
 `pywinpty` build failure that has nothing to do with this repository.

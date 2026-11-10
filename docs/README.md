@@ -11,6 +11,6 @@ Supports the markdown subset TECHNICAL.md uses (headings, lists, tables, fenced 
 `docs/out/` and `*.pdf` are git-ignored. `TODO(result)` markers are printed as-is: fill them in
 `TECHNICAL.md` first, then rebuild.
 
-`TECHNICAL.md` describes the champion pipeline in `mtah/v2/`. Constants are tabled in its section 3
+`TECHNICAL.md` describes the pipeline in `mtah/v2/`. Constants are tabled in its section 3
 with the reason recorded in the briefs or code comments; `UNJUSTIFIED` and `TODO` markers must be
 resolved (or deliberately kept) before the PDF is submitted. The build prints the page count (aim: 4).
