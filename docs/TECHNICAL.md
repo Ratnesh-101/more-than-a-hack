@@ -103,6 +103,18 @@ The diagnostic output reported the following verified properties of the tracking
 - **Kick enrichment across thresholds**: `INFO kick player within 2 m (all usable frames): 0.515`; `INFO kick DV_KICK 3 m/s (/min, near share vs all): 20.72 /min, 0.587 vs 0.515`; `INFO kick DV_KICK 5 m/s (/min, near share vs all): 7.58 /min, 0.437 vs 0.515`; `INFO kick DV_KICK 8 m/s (/min, near share vs all): 1.47 /min, 0.211 vs 0.515`.
 - **Kickoff structure**: `INFO kickoff half 1/2 first live label alternates: A, H (alternates)`; `INFO kickoff post-goal kickoff side opposite to scorer: 4/4 holds`.
 
+**What each component changes:**
+The table reports label-free sequence structure statistics for the shipped default pipeline alongside single-component ablations and documented alternatives. These metrics measure structural properties such as possession counts, durations, and switching rates, but do not represent prediction accuracy. No ground-truth labels were accessed or used to compute these statistics. This ablation comparison is reported solely for transparency into component behaviors and was not used to select pipeline components.
+
+| Component / Variant | Poss (H1 / H2 / Total) | Mean (s) | Share < 3 s | Flicker (/min) | D Share | Graded Diff (%) |
+| --- | --- | --- | --- | --- | --- | --- |
+| (0) Shipped default (semi-Markov) | 130 / 138 / 268 | 16.1 s | 0.071 | 1.19 /min | 0.319 | 0.00% |
+| (a) No Smart Tagging kickoff rule | 130 / 144 / 274 | 16.0 s | 0.066 | 1.19 /min | 0.310 | 1.18% |
+| (b) No live island rule | 130 / 142 / 272 | 16.0 s | 0.070 | 1.19 /min | 0.314 | 0.55% |
+| (c) Min-stoppage Viterbi (champion) | 117 / 125 / 242 | 17.3 s | 0.107 | 1.30 /min | 0.340 | 13.66% |
+| (d) Touch-only alternative | 135 / 144 / 279 | 15.5 s | 0.097 | 1.26 /min | 0.317 | 0.45% |
+| (e) No warm-up-touch reset | 130 / 138 / 268 | 16.1 s | 0.071 | 1.19 /min | 0.319 | 0.03% |
+
 ![Possession density across visible-ball frames (59.3% visible; 490 out-of-pitch frames excluded).](out/figures/possession_heatmap.png)
 
 ![Match timeline of decoded possession and stoppage sequences across both halves.](out/figures/possession_timeline.png)
