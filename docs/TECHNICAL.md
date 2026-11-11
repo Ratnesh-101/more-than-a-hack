@@ -33,7 +33,7 @@ Pipeline execution proceeds through six stages:
 | Longest dead ball (D) run | 146.4 s | 143.2 s | 146.4 s |
 | Leading D run at half start | 0.0 s | 116.2 s | 116.2 s |
 | Kickoff team (first live label) | A | H | A, H (alternates per Law 8) |
-| Post-goal restart side | 2 of 2 | 2 of 2 | conceding side in 4 of 4 cases |
+| Post-goal restart side | 3 of 3 | 1 of 1 | conceding side in 4 of 4 cases |
 | Frame counts (H / A / D / X) | 33,264 / 22,544 / 23,659 / 0 | 30,370 / 21,941 / 27,079 / 0 | 63,634 / 44,485 / 50,738 / 40,462 |
 
 ## 2. Possession Rules Implemented
@@ -45,15 +45,15 @@ The pipeline implements seven explicit possession and stoppage rules grounded in
 3. **Restarts**: Dead ball frames carry no team ownership (`mtah/v2/fallback.py:emissions`). Stoppage frames receive the label `D`. Because dead ball does not reset the team log-odds timer, the team with last touch prior to the stoppage retains possession upon restart until the opposing team executes a touch.
 4. **Hidden-ball gaps**: When ball possession changes across an unobserved tracking occlusion, the transition point is placed at the temporal midpoint of the gap (`mtah/v2/touch.py:_backdate`). If the ball disappears under Team H and reappears with Team A, assigning the handover to the midpoint minimises expected boundary displacement error. When the same team retains the ball across the occlusion, possession continuity is maintained throughout.
 5. **Dead ball cues**: Play is classified as dead (`mtah/v2/fallback.py:_v1_log_dead`) when a high fraction of players are walking (`SLOW_SPEED = 1.5` m/s, `SLOW_WIDTH = 0.35`, `DEAD_SLOW_BONUS = 3.0` nats), when the ball crosses pitch boundaries (`DEAD_OUT_BONUS = 5.0` nats, `OUT_MARGIN_M = 0.5` m per Law 9), or when the ball rests motionless (`STILL_R = 1.0` m over 1.0 s, `STILL_BONUS = 3.0` nats), offset by recent kick events (`KICK_LIVE = 3.0` nats for `LIVE_S = 2.0` s). Baseline stoppage log-odds default to `DEAD_BIAS = -2.5` nats when all cues are quiescent.
-6. **Smart Tagging kickoff rule**: Frames preceding each half's kickoff tag start are marked `D` (`mtah/v2/decode.py:decode_half`, `mtah/v2/tracking.py:load_kickoffs`). The Smart Tagging file is consumed as automatic, uncorrected input, reading only the "Kick Off (Start)" timestamps. In Half 1, the tag begins at frame 11097, prior to the first graded frame 11185, resulting in a 0.0 s dead run at the start of Half 1. In Half 2, the tag begins at frame 113660, yielding an unbroken leading dead run of 2,905 frames (116.2 s) from frame 110808 to 113659.
+6. **Smart Tagging kickoff rule**: Frames preceding each half's kickoff tag start are marked `D` (`mtah/v2/decode.py:decode_half`, `mtah/v2/tracking.py:load_kickoffs`). The Smart Tagging file is consumed as automatic, uncorrected input, reading only the "Kick Off (Start)" timestamps. In Half 1, the tag begins at frame 11097, prior to the first graded frame 11185, resulting in a 0.0 s dead run at the start of Half 1. In Half 2, the tag begins at frame 113660 and the decoder's dead run continues 53 frames past it, yielding an unbroken leading dead run of 2,905 frames (116.2 s) from frame 110808 to frame 113712; the first live label is `H` at frame 113713.
 7. **Evidence-free live island rule**: A live possession run (`H` or `A`) bounded by dead runs (`D`) on both sides with zero ball sightings is converted to `D` (`mtah/v2/decode.py:_label_evidence_free_islands_dead`). On the real match, this rule relabels exactly 4 runs totaling 868 frames, all in Half 2, adjusting total match possessions from 272 down to 268 on the default decoder.
 
 ## 3. Assets Used and Dropped, Training Data
 
 **Assets used:**
 - **Tactical ATD tracking file** (`data/tactical/BAR-ATH_tactical_atd.txt`): 199,319 frames parsed, providing player positions, tracker speeds, and ball coordinates.
-- **Tactical metadata XML** (`data/tactical/BAR-ATH_tactical_atd_meta.xml`): Slot-to-team mapping across 46 slots (Barcelona as home, Athletic Club as away).
-- **Tactical Smart Tagging XML** (`data/tactical/BAR-ATH_tactical_tagging.xml`): Start timestamps of the two "Kick Off (Start)" tags, parsed automatically without human modification.
+- **Tactical metadata XML** (`data/tactical/BAR-ATH_tactical_atd.xml`): Slot-to-team mapping across 46 slots (Barcelona as home, Athletic Club as away).
+- **Tactical Smart Tagging XML** (`data/tactical/BAR-ATH_tactical_smart_tagging.xml`): Start timestamps of the two "Kick Off (Start)" tags, parsed automatically without human modification.
 - **Pitch dimensions**: 105.3 m x 68.0 m from DATA.md.
 
 **Assets dropped:**
@@ -130,7 +130,7 @@ The diagnostic output reported the following verified properties of the tracking
 
 **6. Walking-speed distribution:** The dead-ball cue assumes a clear division between walking and running, but `analysis.real_checks` reports `WARN tracking walking-share bimodal 0 valley found`. Without a clear valley in the walking-share distribution, setting `SLOW_SPEED = 1.5` m/s is an uncalibrated design choice.
 
-**7. Smart Tagging kickoff offset:** Kickoff tags precede the published kickoff frames in DATA.md and FAQ.md by 88 frames (3.5 s) in Half 1 and 82 frames (3.3 s) in Half 2. Consequently, Half 2 turns live approximately 3.3 s before the published kickoff frame. We state this plainly and do not correct it with an invented constant.
+**7. Smart Tagging kickoff offset:** Kickoff tags precede the published kickoff frames in DATA.md and FAQ.md by 88 frames (3.5 s) in Half 1 and 82 frames (3.3 s) in Half 2. The rule ends the forced dead period at the tag start, so the tags alone would turn Half 2 live 3.3 s before the published kickoff frame; on the real match the decoder keeps 53 more frames dead, so the leading dead run ends at frame 113712, 29 frames (1.2 s) before the published kickoff frame 113742. We state this plainly and do not correct it with an invented constant.
 
 **8. Kickoff initial possession evidence:** The first possession following a kickoff has weak touch evidence because the initial touch is brief.
 
@@ -140,7 +140,7 @@ The diagnostic output reported the following verified properties of the tracking
 
 ## 6. Reproduction and Compliance
 
-**Reproduction:** Reproduction requires Python 3.8 to 3.11. The match data is licensed and not included in the repository.
+**Reproduction:** The pinned versions list Python 3.8 to 3.11 as supported, and the continuous-integration workflow (`.github/workflows/tests.yml`) is configured for 3.8 and 3.11. The match data is licensed and not included in the repository.
 
 Single-command reproduction from repository root: `python -m mtah.reproduce --team nirakshak` (accepts optional `--data-dir PATH`; runs the audit, executes the decoder twice to verify determinism, validates the submission, evaluates real-data diagnostics, and checks the final SHA-256 digest `55fd9ef525637467ee6ef405c96bd9821b41d478afc8a5d488e1831a2f464b5f`).
 
@@ -157,7 +157,7 @@ python -m analysis.preflight --team nirakshak --sha256 55fd9ef525637467ee6ef405c
 ```
 
 **Compliance statement:**
-- **Algorithmically generated labels**: Every label was generated entirely by deterministic code without human intervention or manual inspection.
+- **Algorithmically generated labels**: Every label is generated by deterministic code. No label was edited or assigned by hand.
 - **No human-produced match data**: No event data (Opta, StatsBomb, Wyscout, etc.) or manual tracking corrections were accessed or used.
 - **No full-match ground truth**: Full-match ground truth was never accessed or referenced.
 - **Public window check only**: The public 5-minute ground truth was evaluated once early in development solely to check format compliance and alignment; no subsequent code changes or parameter selections used it.
