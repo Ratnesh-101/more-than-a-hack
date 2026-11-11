@@ -1,2 +1,2 @@
-"""v2: the court's champion (stack_2: touch-event team evidence + multi-cue dead ball +
-minimum-stoppage Viterbi), self-contained. Run with `python -m mtah.v2.run --team NAME`."""
+"""v2: shipped default semi-Markov decoder, with minimum-stoppage Viterbi alternative (--variant champion)
+and touch_only alternative (--variant touch_only), self-contained. Run with `python -m mtah.v2.run --team NAME`."""

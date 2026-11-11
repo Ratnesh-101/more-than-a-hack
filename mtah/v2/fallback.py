@@ -1,15 +1,15 @@
-"""Fallbacks of the champion, one flag away (`python -m mtah.v2.run --variant ...`).
+"""Shipped default semi-Markov decoder and touch_only alternative (`python -m mtah.v2.run --variant ...`).
 
-Real tracking may kill the champion's premise (the walking share of the players reaching 0.9 in a
-stoppage, see VERDICT section 4). Two self-contained ports of the court's next-best entries:
+The shipped default is the semi-Markov decoder; the minimum-stoppage Viterbi decoder is the
+documented alternative (--variant champion); touch_only is a documented simpler alternative:
 
+  semi_markov  stack_1: emissions decoded by candidate 12's semi-Markov segment DP, with 02's
+               costs (shipped default decoder).
   touch_only   candidate 02 alone: its touch-event team evidence AND its own dead model (the v1
                dead cues plus STILL_BONUS / KICK_LIVE), decoded by the v1 Viterbi with 02's costs.
-  semi_markov  stack_1: the same emissions decoded by candidate 12's semi-Markov segment DP, with
-               02's costs (the runner-up of the court).
 
-The touch logic shared with the champion (constants, helpers) comes from touch.py, which is
-bit-identical to cand_02's; everything else is ported verbatim with its original constants.
+The touch logic shared with the champion alternative (constants, helpers) comes from touch.py,
+which is bit-identical to cand_02's; everything else is ported verbatim with original constants.
 """
 
 import numpy as np

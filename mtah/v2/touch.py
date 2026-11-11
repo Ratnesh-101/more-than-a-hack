@@ -7,7 +7,7 @@ both). The per-frame H-vs-A log-odds is the clipped difference "time since the l
 "time since the last H touch": constant through ball-missing gaps and loose-ball flights, near
 zero in scrambles where both teams touch in turn, and growing once one team keeps touching. A ball
 that reappears after a gap at the other team's feet is given an unseen hand-over at the gap
-midpoint. Only the team part of cand_02 lives here; its dead-ball cues were dropped by the champion.
+midpoint. Only the team part of cand_02 lives here; its dead-ball cues were dropped by the minimum-stoppage Viterbi alternative (--variant champion).
 """
 
 import numpy as np

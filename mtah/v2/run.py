@@ -3,8 +3,8 @@
     python -m mtah.v2.run --team TEAMNAME            # stream/cached tracking, write submission
     python -m mtah.v2.run --team TEAMNAME --refresh  # rebuild the tracking cache
     python -m mtah.v2.run --team TEAMNAME --variant semi_markov  # shipped default (stack_1)
-    python -m mtah.v2.run --team TEAMNAME --variant champion     # alternative: stack_2 (min-stoppage Viterbi)
-    python -m mtah.v2.run --team TEAMNAME --variant touch_only   # fallback: candidate 02 alone
+    python -m mtah.v2.run --team TEAMNAME --variant champion     # documented alternative: stack_2 (min-stoppage Viterbi)
+    python -m mtah.v2.run --team TEAMNAME --variant touch_only   # documented simpler alternative: candidate 02 alone
     python -m mtah.v2.run --team TEAMNAME --data-dir D --out OTHER_FOLDER
     python evaluation/validate_submission.py submissions/TEAMNAME.csv
 

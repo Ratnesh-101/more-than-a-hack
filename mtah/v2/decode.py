@@ -1,4 +1,4 @@
-"""Emissions and decoder of the champion (stack_2).
+"""Emissions and decoder of the documented alternative: minimum-stoppage Viterbi (--variant champion, stack_2).
 
 Emissions: team log-probabilities from touch events (touch.py) given "live", multiplied by the
 live probability from the dead-ball logit (deadball.py). Decoder: Viterbi over H, A, D where every
@@ -105,7 +105,7 @@ def decode_half(trk, half, lo, hi, decode_segment):
 
 
 def decode(trk, e):
-    """H/A/D inside each graded half with the minimum-stoppage decoder, X outside."""
+    """H/A/D inside each graded half with the minimum-stoppage Viterbi alternative decoder, X outside."""
     labels = np.full(len(e), "X", dtype="<U1")
     k = int(round(MIN_DEAD_S * trk["fps"]))
     for half, lo, hi in trk["blocks"]:
