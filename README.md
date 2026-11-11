@@ -235,7 +235,6 @@ mtah/                       run.py (entry point, delegates to v2), audit.py (dat
   experiments/              frozen evidence of the 12-candidate comparison: briefs/, cand_*.py, stack_*.py, court/ (synthetic harness), judge/
 analysis/                   diagnostics.py (plots), unlabeled_stats.py (label-free statistics), real_checks.py (unlabeled acceptance gate)
 docs/                       the technical document
-prompts/                    working prompts for the team's coding assistants
 data/                       unpack the downloaded match assets here. Empty in a fresh clone
 ```
 
