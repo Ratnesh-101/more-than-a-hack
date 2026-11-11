@@ -168,15 +168,7 @@ python -m analysis.preflight --team nirakshak
   streams the raw tracking once (about 2 minutes, per the `mtah/v2/tracking.py` docstring) and
   caches it under `data/cache/`, which git ignores. The cache carries a version and code-hash stamp
   (`tracking.py:cache_stamp`) and is recomputed on mismatch; add `--refresh` to force a rebuild.
-- Variants: `mtah.v2.run` has `--variant {semi_markov,champion,touch_only}` (default `semi_markov`).
-  The shipped decoder is now `semi_markov`; the former champion, the minimum-stoppage Viterbi, is
-  the alternative (`--variant champion`). The choice was made on unlabeled structure evidence: 28
-  of 44 champion possessions under 3 s were live islands between dead runs and 11 were flip-and-flip-back
-  deflections, while semi_markov has share under 3 s 0.07 vs 0.16, and never on the public scoreboard.
-  The fallback command is `python -m mtah.run --team nirakshak --variant touch_only` (candidate 02
-  alone) and `--variant champion` is documented as the alternative. They are used only if the
-  real-data acceptance gate (`analysis.real_checks`) fails the walking-share premise, decided by
-  the team, never from public-GT score.
+- Variants: `mtah.v2.run` has `--variant {semi_markov,champion,touch_only}`. The shipped default is the semi-Markov decoder; the minimum-stoppage Viterbi decoder is the documented alternative (`--variant champion`); touch_only is a documented simpler alternative (`--variant touch_only`, run with `python -m mtah.run --team nirakshak --variant touch_only`). The choice of default was made on unlabeled structure evidence (share of possessions under 3 s: 0.07 vs 0.16), never on the public scoreboard.
 - `analysis.real_checks` is the acceptance gate from unlabeled statistics only (possession count,
   durations, share under 3 s, flicker, dead-ball share). It never reads ground truth.
 - `mtah.guard` refuses a repository that contains match data, derived exports or secrets. Run it
