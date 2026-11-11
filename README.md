@@ -176,7 +176,7 @@ python -m analysis.preflight --team nirakshak
   The fallback command is `python -m mtah.run --team nirakshak --variant touch_only` (candidate 02
   alone) and `--variant champion` is documented as the alternative. They are used only if the
   real-data acceptance gate (`analysis.real_checks`) fails the walking-share premise, decided by
-  the lead, never from public-GT score.
+  the team, never from public-GT score.
 - `analysis.real_checks` is the acceptance gate from unlabeled statistics only (possession count,
   durations, share under 3 s, flicker, dead-ball share). It never reads ground truth.
 - `mtah.guard` refuses a repository that contains match data, derived exports or secrets. Run it
@@ -189,7 +189,7 @@ python -m analysis.preflight --team nirakshak
   `python -m mtah.v2.tests.test_robust` (about 1 min, 32 edge-case ATD cases),
   `python -m mtah.v2.tests.test_speed_guard` and `python -m pytest tests`.
   `tracking.check_speed_unit` aborts every variant if the speed field does not look like m/s;
-  `real_checks` gates are the lead's guesses, to be re-read against real numbers.
+  `real_checks` gates are the team's guesses, to be re-read against real numbers.
 - `requirements-analysis.txt` / `requirements-docs.txt` are needed for diagnostics / PDF build
   (`pip install -r requirements-analysis.txt` for `python -m analysis.diagnostics --check-alignment`;
   `pip install -r requirements-docs.txt` for `python docs/build_pdf.py`).
@@ -245,9 +245,10 @@ machine, it scores the same way on ours.
 
 ## Requirements
 
-**Python 3.8 or newer.** The evaluation needs `numpy` and `pandas` and nothing else; it is tested
-under 3.8 and 3.11 and produces identical output under both. `starter/baseline.py` needs nothing
-more either — you can reach a scored submission without installing anything else.
+**Python 3.8 or newer.** The evaluation needs `numpy` and `pandas` and nothing else.
+Continuous integration (.github/workflows/tests.yml) runs the tests under Python 3.8 and 3.11.
+`starter/baseline.py` needs nothing more either — you can reach a scored submission without installing
+anything else.
 
 `requirements-analysis.txt` / `requirements-docs.txt` are needed for diagnostics / PDF build.
 The notebooks additionally want `kloppy` and `matplotlib` (`requirements-starter.txt`), and
