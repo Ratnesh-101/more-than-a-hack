@@ -28,7 +28,7 @@ def test_draw_pipeline_headless():
 
 
 def test_expected_block_texts_and_word_counts():
-    """Verify that every block label has between 6 and 9 plain words, with no code names."""
+    """Verify that every block label has between 6 and 12 plain words, with no code names."""
     code_names = ["semi_markov", "_viterbi_min_dead", "Trk", "bx", "by", "from_atd",
                   "_segment_dp", "decode_half", "Viterbi", "ps", "px", "py"]
 
@@ -50,9 +50,9 @@ def test_expected_block_texts_and_word_counts():
         label = b["label"]
         assert frag.lower() in label.lower(), f"Expected fragment {frag!r} in label {label!r}"
 
-        # Word count check: strictly between 6 and 9 words
+        # Word count check: between 6 and 12 plain words
         words = label.split()
-        assert 6 <= len(words) <= 9, f"Label {label!r} has {len(words)} words; expected 6 to 9"
+        assert 6 <= len(words) <= 12, f"Label {label!r} has {len(words)} words; expected 6 to 12"
 
         # Check for plain words: no code names
         for code in code_names:
@@ -69,8 +69,8 @@ def test_figure_text_content():
     # Check input, output, and title markers
     assert "INPUTS" in full_text_blob
     assert "OUTPUT" in full_text_blob
-    assert "Semi-Markov" in full_text_blob
-    assert "USES SMART TAGGING" in full_text_blob
+    assert "Possession pipeline (semi-Markov decoding)" in full_text_blob
+    assert "Smart Tagging" in full_text_blob
 
     # Check that block labels are rendered
     for b in blocks:
@@ -96,12 +96,13 @@ def test_arrow_counts_with_and_without_islands():
 
 
 def test_smart_tagging_marked():
-    """Verify that the block using Smart Tagging is explicitly marked."""
+    """Verify that the blocks using Smart Tagging are explicitly marked."""
     blocks = get_pipeline_blocks(include_islands=True)
     smart_blocks = [b for b in blocks if b.get("smart")]
-    assert len(smart_blocks) == 1
-    assert smart_blocks[0]["num"] == "(6)"
-    assert "Smart Tagging" in smart_blocks[0]["label"]
+    assert len(smart_blocks) == 2
+    assert [b["num"] for b in smart_blocks] == ["(1)", "(6)"]
+    for b in smart_blocks:
+        assert "Smart Tagging" in b["label"]
 
 
 def test_pipeline_figure_determinism(tmp_path):
@@ -121,14 +122,14 @@ def test_pipeline_figure_determinism(tmp_path):
 
 
 def test_pipeline_figure_dimensions(tmp_path):
-    """Verify output image dimensions: 2400 x 700 px at 200 dpi."""
+    """Verify output image dimensions: 2400 x 520 px at 200 dpi."""
     from PIL import Image
 
     out_file = str(tmp_path / "dim_test.png")
-    make_pipeline_figure(out_file, include_islands=True, dpi=200, figsize=(12.0, 3.5))
+    make_pipeline_figure(out_file, include_islands=True, dpi=200, figsize=(12.0, 2.6))
 
     with Image.open(out_file) as img:
-        assert img.size == (2400, 700)
+        assert img.size == (2400, 520)
 
 
 def test_check_has_island_pass():

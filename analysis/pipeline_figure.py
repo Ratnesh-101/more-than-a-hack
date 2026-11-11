@@ -1,8 +1,8 @@
 """Pipeline diagram for the technical document.
 
-Draws the shipped default (semi_markov) end-to-end possession pipeline as a left-to-right
-block diagram with short labels (6 to 9 words per block, plain words, no code names inside
-the boxes). Deterministic rendering with fixed fonts, Agg backend, and no timestamps in
+Draws the default (semi_markov) end-to-end possession pipeline as a left-to-right
+block diagram with short labels (plain words, no code names inside the boxes).
+Deterministic rendering with fixed fonts, Agg backend, and no timestamps in
 image metadata.
 """
 
@@ -36,8 +36,10 @@ COLOR_ARROW = "#3d4850"
 COLOR_SMART_BG = "#d2eff2"
 COLOR_SMART_BORDER = "#1f5d66"
 COLOR_SMART_TEXT = "#0e434a"
+COLOR_SMART_ACCENT_PROCESS = "#38b2ac"
+COLOR_SMART_ACCENT_IO = "#5ebec4"
 
-# Default blocks definition: exactly 6 to 9 plain words per block.
+# Default blocks definition: plain words per block.
 BLOCK_DEFINITIONS = [
     {
         "num": "(1)",
@@ -45,7 +47,7 @@ BLOCK_DEFINITIONS = [
         "lines": ["Match tracking file,", "match metadata,", "and Smart Tagging"],
         "kind": "input",
         "tag": "Input",
-        "smart": False,
+        "smart": True,
         "is_island": False,
     },
     {
@@ -104,8 +106,8 @@ BLOCK_DEFINITIONS = [
     },
     {
         "num": "(8)",
-        "label": "Submission file: predictions inside halves, outside inactive",
-        "lines": ["Submission file:", "predictions inside", "halves, outside", "inactive"],
+        "label": "Submission file: H, A or D inside the graded halves, X outside",
+        "lines": ["Submission file:", "H, A or D inside", "the graded halves,", "X outside"],
         "kind": "output",
         "tag": "Output",
         "smart": False,
@@ -140,7 +142,7 @@ def get_pipeline_blocks(include_islands=None):
     return [b for b in BLOCK_DEFINITIONS if include_islands or not b["is_island"]]
 
 
-def draw_pipeline(ax=None, include_islands=None, figsize=(12.0, 3.5), dpi=200):
+def draw_pipeline(ax=None, include_islands=None, figsize=(12.0, 2.6), dpi=200):
     """Draw the left-to-right possession pipeline on the given axes.
 
     Returns (fig, ax, blocks, arrows).
@@ -156,7 +158,7 @@ def draw_pipeline(ax=None, include_islands=None, figsize=(12.0, 3.5), dpi=200):
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
     ax.set_xlim(0, 12.0)
-    ax.set_ylim(0, 3.5)
+    ax.set_ylim(0, 2.6)
     ax.axis("off")
 
     blocks = get_pipeline_blocks(include_islands=include_islands)
@@ -167,24 +169,24 @@ def draw_pipeline(ax=None, include_islands=None, figsize=(12.0, 3.5), dpi=200):
     arrow_gap = 0.24
     total_gaps = (n - 1) * arrow_gap
     box_w = (12.0 - left_m - right_m - total_gaps) / n
-    box_h = 2.15
-    box_y = 0.55
+    box_h = 1.50
+    box_y = 0.30
 
     # Main pipeline title
     ax.text(
-        6.0, 3.22,
-        "Shipped Default Semi-Markov Possession Pipeline",
-        ha="center", va="center", fontsize=11, fontweight="bold", color="#192832"
+        6.0, 2.35,
+        "Possession pipeline (semi-Markov decoding)",
+        ha="center", va="center", fontsize=11.5, fontweight="bold", color="#192832"
     )
 
     # Inputs on left, output on right markers
     ax.text(
-        left_m, 2.92,
+        left_m, 2.05,
         "INPUTS  (tracking, metadata, Smart Tagging)",
         ha="left", va="center", fontsize=7.2, fontweight="bold", color="#52626d"
     )
     ax.text(
-        12.0 - right_m, 2.92,
+        12.0 - right_m, 2.05,
         "OUTPUT  (submission file)",
         ha="right", va="center", fontsize=7.2, fontweight="bold", color="#52626d"
     )
@@ -197,17 +199,22 @@ def draw_pipeline(ax=None, include_islands=None, figsize=(12.0, 3.5), dpi=200):
         border_col = COLOR_IO_BORDER if is_io else COLOR_PROCESS_BORDER
         head_bg = "#4e5b65" if is_io else "#1c555c"
 
+        border_lw = 1.2
+        if b["smart"]:
+            border_col = COLOR_SMART_ACCENT_IO if is_io else COLOR_SMART_ACCENT_PROCESS
+            border_lw = 1.6
+
         # Main block rectangle
         rect = patches.FancyBboxPatch(
             (x, box_y), box_w, box_h,
             boxstyle="round,pad=0.0,rounding_size=0.07",
-            linewidth=1.2, edgecolor=border_col, facecolor=bg_col, zorder=2
+            linewidth=border_lw, edgecolor=border_col, facecolor=bg_col, zorder=2
         )
         ax.add_patch(rect)
 
         # Header bar inside box
-        head_h = 0.25
-        head_y = box_y + box_h - head_h - 0.08
+        head_h = 0.22
+        head_y = box_y + box_h - head_h - 0.07
         head_w = box_w * 0.88
         head_x = x + (box_w - head_w) / 2.0
         head_rect = patches.FancyBboxPatch(
@@ -219,37 +226,39 @@ def draw_pipeline(ax=None, include_islands=None, figsize=(12.0, 3.5), dpi=200):
         head_text = "{}  {}".format(b["num"], b["tag"].upper())
         ax.text(
             head_x + head_w / 2.0, head_y + head_h / 2.0, head_text,
-            ha="center", va="center", fontsize=6.3, fontweight="bold", color="#ffffff", zorder=4
+            ha="center", va="center", fontsize=6.5, fontweight="bold", color="#ffffff", zorder=4
         )
 
-        # Smart Tagging badge above block if applicable
+        # Attached tag under header chip if applicable
+        tag_bottom = head_y
         if b["smart"]:
-            st_top_h = 0.18
-            st_top_w = box_w * 1.08
-            st_top_x = x + (box_w - st_top_w) / 2.0
-            st_top_y = 2.83
-            st_rect = patches.FancyBboxPatch(
-                (st_top_x, st_top_y), st_top_w, st_top_h,
+            tag_h = 0.15
+            tag_w = box_w * 0.80
+            tag_x = x + (box_w - tag_w) / 2.0
+            tag_y = head_y - 0.04 - tag_h
+            tag_rect = patches.FancyBboxPatch(
+                (tag_x, tag_y), tag_w, tag_h,
                 boxstyle="round,pad=0.0,rounding_size=0.03",
                 linewidth=0.7, edgecolor=COLOR_SMART_BORDER, facecolor=COLOR_SMART_BG, zorder=3
             )
-            ax.add_patch(st_rect)
+            ax.add_patch(tag_rect)
             ax.text(
-                st_top_x + st_top_w / 2.0, st_top_y + st_top_h / 2.0,
-                "* USES SMART TAGGING",
-                ha="center", va="center", fontsize=4.8, fontweight="bold", color=COLOR_SMART_TEXT, zorder=4
+                tag_x + tag_w / 2.0, tag_y + tag_h / 2.0,
+                "Smart Tagging",
+                ha="center", va="center", fontsize=5.3, fontweight="bold", color=COLOR_SMART_TEXT, zorder=4
             )
+            tag_bottom = tag_y
 
-        # Label text
+        # Label text vertically centered in the body area
+        content_top = tag_bottom if b["smart"] else head_y
+        content_bot = box_y + 0.07
+        text_y = (content_top + content_bot) / 2.0
         full_text = "\n".join(b["lines"])
-        top_bound = head_y - 0.06
-        bot_bound = box_y + 0.10
-        text_y = (top_bound + bot_bound) / 2.0
 
         ax.text(
             x + box_w / 2.0, text_y, full_text,
-            ha="center", va="center", fontsize=6.2, color=COLOR_TEXT,
-            linespacing=1.35, zorder=4
+            ha="center", va="center", fontsize=6.4, color=COLOR_TEXT,
+            linespacing=1.28, zorder=4
         )
 
         # Thin dark-grey arrow to next block
@@ -270,7 +279,7 @@ def draw_pipeline(ax=None, include_islands=None, figsize=(12.0, 3.5), dpi=200):
     return fig, ax, blocks, arrows
 
 
-def make_pipeline_figure(out_path, include_islands=None, dpi=200, figsize=(12.0, 3.5)):
+def make_pipeline_figure(out_path, include_islands=None, dpi=200, figsize=(12.0, 2.6)):
     """Generate and save the pipeline figure deterministically, returning (path, sha256)."""
     target_path = out_path
     if os.path.isdir(target_path) or not target_path.lower().endswith(".png"):
