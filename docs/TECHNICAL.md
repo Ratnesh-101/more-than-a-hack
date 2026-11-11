@@ -1,154 +1,167 @@
-# Technical document: team nirakshak, More Than a Hack 2027, Phase 1 (ball possession)
+# Technical Document: Team nirakshak, More Than a Hack 2027, Phase 1
 
-Status: DRAFT for the semi-Markov design in `mtah/v2/`. No real-data result exists yet; every missing number is `TODO(result)`. Every number labelled "synthetic" comes from our own synthetic match generator, not from the provided game. Code references are `file:function` (no match data is in the repository).
+Ball possession estimation system by team **nirakshak** for More Than a Hack 2027 (Phase 1). Code repository: https://github.com/Ratnesh-101/more-than-a-hack. Licensed under the MIT License (see `LICENSE`). The match data is not included in the repository, as guarded by `mtah.guard`.
 
-## 1. Approach
+## 1. Approach and Summary
 
-For each of the 199,319 tactical frames the pipeline writes `H`, `A`, `D` or `X`:
+For each of the 199,319 tactical frames (158,857 graded across two halves, 40,462 ungraded outside them), the pipeline assigns `H` (FC Barcelona), `A` (Athletic Club), `D` (dead ball), or `X` (ungraded). Data facts (`python -m mtah.audit`): 199,319 records parsed, 158,857 graded frames, ball visible on 59.3% of graded frames (94,214 frames), mean 20.5 tracked objects, tracker speed in m/s (median 1.41 m/s, p99 6.4 m/s).
 
-The shipped decoder is now `semi_markov` (`mtah/v2/fallback.py:_decode_semi_markov`); the former champion, the minimum-stoppage Viterbi (`decode.py:_viterbi_min_dead`), is the alternative (`--variant champion`). The choice was made on unlabeled structure evidence: 28 of 44 champion possessions under 3 s were live islands between dead runs and 11 were flip-and-flip-back deflections, while semi_markov has share under 3 s 0.07 vs 0.16, and never on the public scoreboard.
+Our shipped default pipeline is a semi-Markov segment-level duration decoder (`mtah/v2/fallback.py:_decode_semi_markov`), executed via `python -m mtah.run --team nirakshak`. Its output SHA-256 digest is `55fd9ef525637467ee6ef405c96bd9821b41d478afc8a5d488e1831a2f464b5f` across repeated runs. Documented alternatives: `--variant champion` (`7fd3bc08fb6157854437a25d5cb124ead1e5346f54e9b7c74231d3981326413c`) and `--variant touch_only` (`704d7cd316a428c9899bce39df9d579b3fc94e8e3a58842bd35642e089cdbd27`).
 
-Pipeline: `raw tactical ATD` -> `Trk` arrays (`mtah/v2/tracking.py:from_atd`) -> touches and team log-odds (`touch.py:team_logodds`) -> emissions (`fallback.py:emissions` for semi_markov / `decode.py:emissions` for champion) -> semi-Markov segment DP (`fallback.py:_decode_semi_markov`) / minimum-stoppage Viterbi (`decode.py:_viterbi_min_dead`) -> `X` outside the two graded halves (`decode.py:decode_half`; blocks 11185-90651 and 110808-190197 from `games.py:half_video_blocks`).
+The decoder choice between minimum-stoppage Viterbi and semi-Markov was made entirely from unlabeled output structure on the real match: minimum-stoppage Viterbi produced 0.160 of possessions under 3 s (and 33 live islands between dead runs with no ball sighting), whereas semi-Markov produced 0.070. The acceptance band (at most 0.10) was written down before data arrived; no ground-truth label was used. It remains a choice made on this match.
 
-- **Tracking** (`tracking.py:_stream`): player x, y (scaled to metres by the 105.3 x 68.0 m pitch), player speed, team of each of the 46 slots (`starter/baseline.py:team_of_each_track`, first listed team = home) and the ball.
-- **Team evidence** (`touch.py`): possession is the team of the last credible touch. A touch is a kick (ball velocity changes by more than 5 m/s at a player) or a carry (ball within 1.5 m of one team and clearly nearer it, for 1 s). The H-vs-A log-odds `r` is the clipped difference "time since the last A touch" minus "time since the last H touch" in seconds, so it is constant through ball-missing gaps and loose balls and near zero when both teams touch in turn.
-- **Dead ball** (`deadball.py` / `fallback.py`): a sum of football cues (most players walking, ball beyond the lines, ball still on a restart spot, kickoff geometry, minus cues for sprinting and passing). Emissions are `[log P(H) + log(1-p), log P(A) + log(1-p), log p]` with `p` the dead probability, so D never carries a team.
-- **Decoder** (`fallback.py:_decode_semi_markov`): segment-level (hidden semi-Markov) decoder with explicit duration modeling (shipped default). The former champion, the minimum-stoppage Viterbi (`decode.py:_viterbi_min_dead`), is the documented alternative (`--variant champion`).
+Why: `spellF1` evaluates whole possessions matched by IoU (EVALUATION.md). Per-frame nearest-player rules flicker through scrambles and deflections, creating short artifactual possessions. Combining touch-event evidence with explicit segment duration modeling and switch penalties ensures a possession change occurs only after sustained opposing team contact.
 
-Why: `spellF1` scores whole possessions matched by IoU (EVALUATION.md). Per-frame nearest-player labels flicker through scrambles and deflections and invent short possessions. Touch evidence plus duration modeling / switch costs makes a team change only after sustained touching.
+Pipeline execution proceeds through six stages:
+1. **Tracking ingestion** (`mtah/v2/tracking.py:from_atd`): Player and ball coordinates scaled to pitch dimensions (105.3 m x 68.0 m).
+2. **Touch evidence** (`mtah/v2/touch.py:team_logodds`): Establishes team log-odds evidence `r` from kicks and sustained carries.
+3. **Dead-ball emissions** (`mtah/v2/fallback.py:emissions`, `mtah/v2/fallback.py:_v1_log_dead`): Stoppage logits from walking shares and boundary cues.
+4. **Duration decoding** (`mtah/v2/fallback.py:_decode_semi_markov`): Resolves sequence labels using segment dynamic programming with lognormal priors.
+5. **Kickoff suppression** (`mtah/v2/decode.py:decode_half`): Enforces dead ball prior to start-of-half kickoff tags via Smart Tagging.
+6. **Live island suppression** (`mtah/v2/decode.py:_label_evidence_free_islands_dead`): Converts evidence-free live runs into `D`. Ungraded frames receive `X` (`games.py:half_video_blocks`).
 
-## 2. Possession rules implemented
+![End-to-end pipeline of the shipped semi-Markov possession decoder.](out/figures/pipeline.png)
 
-| Rule | Code | Football justification |
-|---|---|---|
-| Last-touch team keeps possession through loose balls and ball-missing gaps | `touch.py:team_logodds` (`r` depends only on time since each team's last touch, so it does not change without a touch); `decode.py:_viterbi_min_dead` (SWITCH_COST) | CHALLENGE.md: contested or loose ball stays with the last team. The v1 nearest-player rule changed team whenever another player became nearest. |
-| A team takes over only on a kick or a carry | `touch.py:_touches` (`kick`: `dv > DV_KICK` at a player within `R_KICK`; `held_h`/`held_a`: within `R_CTRL` for `HOLD`) | A pass flying past a defender is not a touch (ball velocity unchanged); a deflection or won aerial is not control. |
-| Contested touch is credited to both teams | `touch.py:_touches` (`reach_h`/`reach_a` use `MARGIN`; `held_*` require a clear `MARGIN` advantage) | A duel gives neither team control; both timers reset, `r` stays near zero. |
-| Hand-over inside a hidden-ball gap is placed at the gap midpoint | `touch.py:_backdate` | If the ball reappears at the other team's feet, it changed hands somewhere in the gap; with no evidence of when, the midpoint minimises expected boundary error. |
-| Dead ball from the share of players walking | `deadball.py:dead_logit` (`frac_walk`, `slow`, `W_SLOW`, `W_HSR`) | In a stoppage almost everyone walks; 1 s smoothing absorbs brief tracking spikes, though one sustained sprinter will veto walking-only dead ball. |
-| Dead ball: ball outside the lines | `deadball.py:dead_logit` (`out`, `W_OUT`, persisted 2 s) | Ball over a line is out of play; persistence because a lofted ball projects beyond the lines. |
-| Dead ball: still ball on a restart spot | `deadball.py:dead_logit` (`still`, `spot`, `W_STILL`, `W_SPOT`) | Corner arc, touchline, goal area and centre spot cover boundary restarts and kickoffs, but omit free kicks (Law 13) and penalties (Law 14). |
-| Dead ball: kickoff geometry | `deadball.py:dead_logit` (`kickoff`, `W_KICKOFF`) | Teams separated by the halfway line reflects kickoff rules (Law 8), but can also trigger during live play in a deep block if the ball is untracked (the ball is untracked on 40.7% of graded frames). |
-| Minimum stoppage 3 s | `decode.py:_viterbi_min_dead` (`k = MIN_DEAD_S * fps`; the first frame of a half is exempt) | Regularization floor to prevent brief artifactual D flickers from splitting possessions; the fastest restarts can be shorter and the ground-truth onset convention for a stoppage is unmeasured. |
-| No ownership inferred for dead ball | `decode.py:emissions` (D emission is `log p`, no team term) | D is its own label; the team log-odds `r` is not reset by D, so the last toucher is the default after a stoppage. There is no restart-team rule. |
-| No `X` inside graded halves | `decode.py:decode` fills `X` everywhere, then overwrites every frame of each block from `_viterbi_min_dead`, which returns states 0, 1, 2 only | Verified by reading the code; confirm on the real CSV (Claims to verify). |
-
-## 3. Parameters
-
-Every constant in `touch.py`, `deadball.py`, `decode.py`. "Reason" is what the briefs or code comments say. Nothing was fitted. No constant is learned from the provided game. Constants marked **dev** were checked against our synthetic dev seeds 1-5, which are not independent of the generator.
-
-| Constant | Value | Meaning | Reason as written |
+| Metric | Half 1 | Half 2 | Full Match |
 |---|---|---|---|
-| `touch.K` | 6 frames | velocity line-fit half-window (0.24 s) | averages tracker jitter but keeps touches apart |
-| `touch.V_MAX` | 40 m/s | steps faster are glitches | above hardest shot (~35 m/s) |
-| `touch.DV_KICK` | 5 m/s | velocity change that counts as a kick | heuristic threshold for deliberate passes, traps and shots (18 km/h); separates kicks from noise only if real ball position error is within ~0.3 m, which is unverified |
-| `touch.R_KICK` | 2.0 m | reach for a kick | leg ~1 m plus ~1 m position error |
-| `touch.R_CTRL` | 1.5 m | carry distance | heuristic proximity threshold for close dribbling; unsupported by empirical dribbling measurements and unverified |
-| `touch.MARGIN` | 0.5 m | team-distance margin for contested touch | both this close = duel, not control. Brief 03 cites synthetic carry offset 0.7 m (flat 1.2-2 m) for a related radius |
-| `touch.HOLD` | 12 frames each side (1 s) | carry must persist | "keeping the ball, not passing by it". No sensitivity run recorded; whether it was set after viewing dev seeds is not recorded - ask lead |
-| `touch.TAU` | 1.0 s | seconds of touch lead per nat | 1 s lead = 1 nat. Synthetic: TAU 2 s gives 0.598 vs 0.597 (cand 02 alone) |
-| `touch.CLIP` | 3.0 nats | cap on `r` | one old touch cannot outweigh 3 s of fresh evidence. Whether set after viewing dev seeds is not recorded - ask lead |
-| `touch.BIG` | 1e9 | "never touched" sentinel | bookkeeping, not a tuning parameter |
-| `deadball.OUT_MARGIN_M` | 0.5 m | ball-out margin | ball-tracking error near a line; same as v1 |
-| `deadball.WALK_MPS` | 2.0 m/s | walking pace ceiling | top of walking (~7 km/h). **dev**: sits just above the synthetic dead-walk speed 1.6 m/s; synthetic 1.8 gives -0.020 spellF1, 1.5 gives -0.07, 2.5 gives -0.009. A cliff |
-| `deadball.HSR_MPS` | 5.5 m/s | high-speed-running threshold | standard in football physical reports (19.8 km/h). **dev**: equals the synthetic chaser speed; 5.0 and 6.0 are flat |
-| `deadball.SLOW_FRAC` / `SLOW_WIDTH` | 0.9 / 0.03 | walking share that signals a stoppage; softness | targets ~90% walking across all tracked known-team slots (mean ~20.5 tracked per graded frame, which includes goalkeepers and duplicate tracks, so not strictly 20 outfielders); ~1 player of softness. Synthetic 0.85/0.95 gives -0.018/-0.013 |
-| `deadball.SMOOTH_S` | 1.0 s | player cues averaged | a stoppage is a state, not a frame |
-| `deadball.SPEED_LAG` | 2 frames | half-window of position-derived speed | 0.16 s central difference, near the tracker speed it replaces; used only where the ATD speed (documented m/s) is NaN. Noise ~1.4 x position error / 0.16 s; check and fallback in DECISIONS.md |
-| `deadball.BALL_WIN_S` | 1.0 s | ball displacement window | long enough to ignore jitter |
-| `deadball.BALL_STILL_MPS` / `BALL_PASS_MPS` | 1.5 / 8.0 m/s | ball "still" / "passing" | slower than walking / slowest typical ground pass |
-| `deadball.PERSIST_S` / `PERSIST_FRAC` | 2.0 s / 0.75 | ball cues must hold this long, on this share of sightings | longer than a lofted ball's spell beyond the line or a shielding pause; tolerates a glitch or two |
-| `deadball.SPOT_R_M` | 2.0 m | restart-spot radius | corner arc (1 m) / centre spot plus tracking error |
-| `deadball.LINE_M` | 1.0 m | throw-in band | taken on or behind the touchline |
-| `deadball.GOAL_AREA` | (6.0, 10.0) m | goal-area depth, half-width | goal area 5.5 m deep, 18.32 m wide, plus error |
-| `deadball.OWN_HALF_FRAC` | 0.95 | kickoff share in own half | allows one mis-tracked slot |
-| `deadball.DEAD_BIAS` | -2.5 | prior dead log-odds | not a base rate (the ball is out of play roughly a third of the time): log-odds with every cue silent, so a cue-less 3 s D costs >130 nats. Sets the cue lattice, see DECISIONS.md |
-| `deadball.W_SLOW` / `W_OUT` | 3.0 / 5.0 | cue weights (nats) | with the bias: walking alone gives +0.5 (leans dead, vetoed by one sustained sprinter or a pass-speed ball); ball out alone gives +2.5 and decides (Law 9). See DECISIONS.md |
-| `deadball.W_HSR` | -2.0 per runner, cap 2 | sprinting means live | sprinting >19.8 km/h for 1 s (smoothed) means live: one runner turns walking-alone to -1.5, two turn ball-out to -1.5; the cap limits ghost-slot damage. See DECISIONS.md |
-| `deadball.W_STILL`, `W_SPOT`, `W_KICKOFF`, `W_PASS` | 1.5, 2.0, 3.0, -2.0 | other cue weights | "moderate cues that cannot outvote the player cue alone". Synthetic: the four ball cues together add +0.003 spellF1, i.e. noise; the kickoff cue never fires on synthetic data |
-| `decode.SWITCH_COST` | 30 | H<->A penalty (nats) | ~1.5 s of new-team touching flips under continuous contact; intended to penalize fleeting deflections, though evidence during loose balls can still exceed the nominal 60-nat round trip. Synthetic plateau: 20/45 gives 0.598/0.593 (cand 02 alone) |
-| `decode.DEAD_COST` | 12 | live<->dead penalty | round trip 24 < 30 is intended: restarts often change team (Laws 13, 15-17); the 3 s floor makes a cue-less fake D cost >130 nats. Synthetic 12/30: 0.592/0.595. See DECISIONS.md |
-| `decode.MIN_DEAD_S` | 3.0 s | minimum stoppage | regularization floor against artifactual splits; quick restarts can be faster and the stoppage onset convention is unmeasured. Synthetic: 5 s scored higher (0.537 vs 0.530); 3 s kept on football grounds |
-| `decode.EPS` | 1e-6 | probability clip | keeps log-probabilities finite |
+| Possessions count | 130 | 138 | 268 |
+| Mean possession duration | 17.2 s | 15.2 s | 16.1 s |
+| Share of possessions under 3 s | 0.046 | 0.094 | 0.071 |
+| Direct H<->A flicker per minute | 1.15 /min | 1.23 /min | 1.19 /min |
+| Dead ball (D) frame share | 0.298 | 0.341 | 0.319 |
+| Longest possession run | 98.3 s | 83.8 s | 98.3 s |
+| Longest dead ball (D) run | 146.4 s | 143.2 s | 146.4 s |
+| Leading D run at half start | 0.0 s | 116.2 s | 116.2 s |
+| Kickoff team (first live label) | A | H | A, H (alternates per Law 8) |
+| Post-goal restart side | 2 of 2 | 2 of 2 | conceding side in 4 of 4 cases |
+| Frame counts (H / A / D / X) | 33,264 / 22,544 / 23,659 / 0 | 30,370 / 21,941 / 27,079 / 0 | 63,634 / 44,485 / 50,738 / 40,462 |
 
-## 4. Assets and training data
+## 2. Possession Rules Implemented
 
-**Used:** tactical ATD (player positions, player speeds, ball position) and its metadata (team of each slot); pitch size. **Not used:** tactical or broadcast video, homography, Smart Tagging, broadcast feed (no code in `mtah/v2/` opens them; `tracking.py` requests only `atd_meta` and `atd_raw`). Why they were not used is not recorded beyond scope. The public 5-minute ground truth is used only to check format and alignment (`evaluation/validate_submission.py`, `analysis/diagnostics.py --check-alignment`), never to tune or choose anything.
+The pipeline implements seven explicit possession and stoppage rules grounded in football structure and tracking mechanics:
 
-**Training data: none.** No hand labels anywhere, no data from the provided game, no learned or fitted parameters, no external or event data. All constants are fixed in source (section 3).
+1. **Loose balls**: Possession remains with the team of the last credible touch throughout loose balls, aerial trajectories, and unobserved tracking gaps (`mtah/v2/touch.py:team_logodds`). The team log-odds `r` reflects the difference between time elapsed since the opponent's last touch and time since the team's last touch. In the absence of new touches, `r` remains constant, and a transition cost `SWITCH_COST = 30.0` nats prevents spurious possession alternations.
+2. **Contested touches**: Duels and contested touches are credited simultaneously to both teams (`mtah/v2/touch.py:_touches`). Using contest margin `MARGIN = 0.5` m, when players from opposing teams are equidistant to the ball, neither team establishes control. Both timers reset, holding `r` near zero and preserving the prevailing possession state.
+3. **Restarts**: Dead ball frames carry no team ownership (`mtah/v2/fallback.py:emissions`). Stoppage frames receive the label `D`. Because dead ball does not reset the team log-odds timer, the team with last touch prior to the stoppage retains possession upon restart until the opposing team executes a touch.
+4. **Hidden-ball gaps**: When ball possession changes across an unobserved tracking occlusion, the transition point is placed at the temporal midpoint of the gap (`mtah/v2/touch.py:_backdate`). If the ball disappears under Team H and reappears with Team A, assigning the handover to the midpoint minimises expected boundary displacement error. When the same team retains the ball across the occlusion, possession continuity is maintained throughout.
+5. **Dead ball cues**: Play is classified as dead (`mtah/v2/fallback.py:_v1_log_dead`) when a high fraction of players are walking (`SLOW_SPEED = 1.5` m/s, `SLOW_WIDTH = 0.35`, `DEAD_SLOW_BONUS = 3.0` nats), when the ball crosses pitch boundaries (`DEAD_OUT_BONUS = 5.0` nats, `OUT_MARGIN_M = 0.5` m per Law 9), or when the ball rests motionless (`STILL_R = 1.0` m over 1.0 s, `STILL_BONUS = 3.0` nats), offset by recent kick events (`KICK_LIVE = 3.0` nats for `LIVE_S = 2.0` s). Baseline stoppage log-odds default to `DEAD_BIAS = -2.5` nats when all cues are quiescent.
+6. **Smart Tagging kickoff rule**: Frames preceding each half's kickoff tag start are marked `D` (`mtah/v2/decode.py:decode_half`, `mtah/v2/tracking.py:load_kickoffs`). The Smart Tagging file is consumed as automatic, uncorrected input, reading only the "Kick Off (Start)" timestamps. In Half 1, the tag begins at frame 11097, prior to the first graded frame 11185, resulting in a 0.0 s dead run at the start of Half 1. In Half 2, the tag begins at frame 113660, yielding an unbroken leading dead run of 2,905 frames (116.2 s) from frame 110808 to 113659.
+7. **Evidence-free live island rule**: A live possession run (`H` or `A`) bounded by dead runs (`D`) on both sides with zero ball sightings is converted to `D` (`mtah/v2/decode.py:_label_evidence_free_islands_dead`). On the real match, this rule relabels exactly 4 runs totaling 868 frames, all in Half 2, adjusting total match possessions from 272 down to 268 on the default decoder.
 
-**Synthetic data.** Development used a synthetic match generator written by the team (`mtah/experiments/court/synth.py`). Its ground truth is the generator's own. It cannot tell us how real annotators label possession. It rewards ball-proximity logic by construction (the ball snaps onto the receiver, carries sit ~0.7 m from a player), and its ball noise (0.2 m), ball-missing gaps (41%) and dead-ball physics (players walk at 1.6 m/s, ball perfectly still) are our guesses. The briefs flag several constants as fitted to it (section 3, **dev**).
+## 3. Assets Used and Dropped, Training Data
 
-## 5. Development process
+**Assets used:**
+- **Tactical ATD tracking file** (`data/tactical/BAR-ATH_tactical_atd.txt`): 199,319 frames parsed, providing player positions, tracker speeds, and ball coordinates.
+- **Tactical metadata XML** (`data/tactical/BAR-ATH_tactical_atd_meta.xml`): Slot-to-team mapping across 46 slots (Barcelona as home, Athletic Club as away).
+- **Tactical Smart Tagging XML** (`data/tactical/BAR-ATH_tactical_tagging.xml`): Start timestamps of the two "Kick Off (Start)" tags, parsed automatically without human modification.
+- **Pitch dimensions**: 105.3 m x 68.0 m from DATA.md.
 
-- Twelve candidate designs were built independently against one shared synthetic harness (`mtah/experiments/court/`, briefs in `mtah/experiments/briefs/`) and compared on synthetic hidden seeds 101-110 (20 min each, decision rule fixed beforehand, `mtah/experiments/briefs/VERDICT.md`). The experiments are kept as frozen evidence.
-- Champion: touch-event team evidence (02) + multi-cue dead ball and minimum-stoppage decoder (08). Synthetic spellF1 0.648 against 0.464 for the v1 nearest-player baseline: paired mean +0.184 (bootstrap 95% CI +0.158 to +0.209), ahead on 10/10 seeds. Synthetic only.
-- Dropped, one line each (synthetic, `mtah/experiments/briefs/VERDICT.md`): pass-chain confirmation (03: 0.588, below touch events); local superiority/density (07: wrong-signed, near ties v1, since defenders outnumber the attacker near the ball); pitch-control intercept time (11: no spellF1 gain, CI includes 0); team shape (06: 0.511, weak); territory (09: 0.537, weights fitted on pseudo-labels from the match's own nearest-player frames); ball reconstruction (05: stacked on the champion +0.007, CI includes 0); movement (10) and dwell time (04): below touch events; semi-Markov decoder (12) as a layer: stack 0.640 vs 0.648, so the min-stoppage decoder won; incumbent-plus (01): CI includes 0.
-- Dead-ball (08) alone and decoder (12) alone are not significant on hidden seeds; both pay off only on top of touch-event team evidence.
-- **Real-data performance is unmeasured until the real run.** Section 8 is empty until then.
+**Assets dropped:**
+- **Video recordings**: Tactical and broadcast MP4 files were unread.
+- **Broadcast feed**: Broadcast tracking stream was unread.
+- **Homography**: Homography calibration files were unread; ATD coordinates directly scale to metric pitch positions.
+- **Tactical tags**: All event tags other than start-of-half kickoffs (passes, shots, fouls, offsides, substitutions, cards) were unread.
 
-## 6. Limitations
+**Training data: none.** No hand labels were created or used; no data from the provided match was used as labels; no learned or fitted parameters exist in the pipeline; no external or event datasets (Opta, StatsBomb, Wyscout, etc.) were used; and no pre-trained model and no LLM is in the pipeline.
 
-- The walking-share dead-ball cue may fail if real stoppage players jog, or if the ATD speed definition differs from m/s: the share never reaches 0.9, D is missed, and WALK_MPS has a cliff (synthetic -0.02 at 1.8 m/s).
-- Kick detection depends on real ball jitter. Real jitter of 0.5-1 m or bounces create spurious kicks. Ball height is not observed, so bounces and headers near a player read as kicks.
-- Kick detection needs 13 consecutive visible ball frames (`touch.K`). If real ball visibility is flickery, team evidence can vanish; `analysis.real_checks` reports visible-run lengths to check this.
-- The speed-unit guard (`check_speed_unit`) only catches gross unit errors (e.g. km/h or normalised units); a subtly different speed definition passes it and can still shift the walking share.
-- The still-ball cue is silent if the ball is untracked at stoppages. A keeper holding the ball can be marked D.
-- Possessions are undercounted on synthetic data (53 predicted vs 67 true). Turnovers shorter than 2-3 s are structurally missed (minimum evidence, 3 s stoppage floor).
-- A hand-over hidden in a long ball gap is placed at the gap midpoint, which can be wrong by half the gap.
-- No restart logic: after a stoppage the last toucher keeps possession until the other team touches the ball.
-- A wrong-team or duplicate slot that carries the ball counts as the other team's control.
-- Home/away comes from team order in the ATD metadata (first = home; DATA.md says home is Barcelona).
-- One match only; the constants have not been tested elsewhere.
+The public 5-minute ground truth window was scored once, early in development on an earlier decoder version, solely as a sanity check of format and coordinate alignment as permitted by competition rules. No subsequent change or parameter selection used it, and we have no full-match ground truth score.
 
-With more time: measure ball jitter and the walking-speed distribution on the real data (label-free) and replace the guessed ones; add an explicit restart-team rule.
+**Parameter justification and sensitivity:** Every fixed constant in the pipeline is cataloged in `docs/PARAMETERS.md` along with its design basis (official document, measured on the match without labels, football law, physical limit, design choice not validated against labels, heuristic no support found). A one-at-a-time perturbation (0.5x and 2.0x) of pipeline constants on the real tracking data shows that output is most sensitive to dead-ball thresholds, where altering `fallback.SLOW_SPEED` changes up to 45.18% of graded frames, followed by `fallback.DEAD_BIAS` (26.10%) and `fallback.DEAD_SLOW_BONUS` (24.42%). Across the top-10 most sensitive parameters, four govern stoppage detection and six govern touch attribution (`touch.HOLD` at 13.75%, `touch.DV_KICK` at 9.79%, `touch.K` at 9.50%, `touch.R_CTRL` at 9.47%, `fallback.STILL_R` at 6.73%, and `touch.R_KICK` at 5.78%). None of these constants was tuned against labels or scores, and several have no measured empirical support beyond fixed design choices (see `docs/PARAMETERS.md`).
 
-## 7. Reproduction
+## 4. Results from the Real Match
 
-Python 3.8 to 3.11. The data is gated and is not in the repository.
+The pipeline was executed on the match data via `python -m mtah.run --team nirakshak`.
 
-```bash
-git clone <repository-url> && cd <repository>
-python -m venv .venv                    # activate it (see README.md, Reproduce)
-pip install -r requirements.txt
-# unpack the data bundle into ./data, or set MTAH_DATA_DIR
-python -m mtah.audit                    # data-arrival audit (checks our parse against DATA.md)
-python -m mtah.run --team nirakshak     # writes submissions/nirakshak.csv
-python evaluation/validate_submission.py submissions/nirakshak.csv
-python -m analysis.real_checks --csv submissions/nirakshak.csv   # unlabeled acceptance gate
-python -m analysis.preflight --team nirakshak                    # final checklist, run last
+**Official submission validation:** Validation via `python evaluation/validate_submission.py submissions/nirakshak.csv` confirmed format compliance:
+
+```
+OK    nirakshak.csv
+      199319 rows, frame 0..199318
+
+      label counts
+        H    63634   31.9%
+        A    44485   22.3%
+        D    50738   25.5%
+        X    40462   20.3%
+
+      reports 268 possessions of mean 16.1 s
+      (counted with each X as a gap; the scorer bridges abstentions inside a real
+       possession, so its count can be lower than this one)
+
+Valid. Note this checks the format only -- it says nothing about whether the labels are right.
 ```
 
-- The first run streams the raw ATD once (about 2 minutes, quoted from the `tracking.py` docstring, not measured) and caches the tracking under `data/cache/`. The cache carries a version and code-hash stamp (`tracking.py:cache_stamp`) and is recomputed when it does not match; `--refresh` forces a rebuild.
-- Variants: `mtah.run` delegates to `mtah.v2.run`, which has `--variant {semi_markov,champion,touch_only}` (default `semi_markov`). The shipped decoder is now `semi_markov`; the former champion, the minimum-stoppage Viterbi, is the alternative (`--variant champion`). The choice was made on unlabeled structure evidence: 28 of 44 champion possessions under 3 s were live islands between dead runs and 11 were flip-and-flip-back deflections, while semi_markov has share under 3 s 0.07 vs 0.16, and never on the public scoreboard. The fallback command is `python -m mtah.run --team nirakshak --variant touch_only` (candidate 02 alone) and `--variant champion` is documented as the alternative. They are used only if the real-data acceptance gate (`analysis.real_checks`) fails the walking-share premise, a decision for the lead, never made from public-GT score.
-- Deterministic: no randomness in `mtah/v2/`, tie-breaks are fixed (`_viterbi_min_dead` keeps the current state), the file is written with `\n` newlines, and `run.py` prints a SHA-256 of the output. Golden test: `python -m mtah.v2.tests.test_golden` checks the port against the experiment on synthetic seeds 1-3 (emissions to 1e-9), determinism and a runtime limit.
-- Tests (all synthetic, no match data): `python -m mtah.v2.tests.test_golden`, `python -m mtah.v2.tests.test_fallback` (fallback variants equal their experiments), `python -m mtah.v2.tests.test_e2e` (synthetic bundle through the entry point and the official validator), `python -m mtah.v2.tests.test_robust` (about 1 min; 32 malformed or edge-case ATD cases: ball missing up to 100%, NaN speeds, one team untracked, gaps in the file, ball glitches, speed-unit probes), `python -m mtah.v2.tests.test_speed_guard` and `python -m pytest tests`. `python -m analysis.preflight --team nirakshak` is the last step before upload.
-- Speed-unit guard: `tracking.py:check_speed_unit` aborts every variant (exit 1, with a message) if the player speed field does not look like m/s (median below 0.3, or 95th percentile outside 2 to 15). It only catches gross unit errors.
-- `python -m mtah.guard` must pass before any push (blocks match data and derived exports).
-- `analysis.real_checks` implements the acceptance gates of `mtah/experiments/briefs/VERDICT.md` item 4 from unlabeled statistics only (possessions per half, mean duration 8-25 s, share under 3 s at most 0.10, flicker 0.5-3 per minute, D share, no half starting over 60 s in D). It never reads ground truth. It also reports ball-visibility run lengths, a speed-unit sanity row and a team-balance warning. Those gates are the lead's guesses, set before any real run, and are to be re-read against the real numbers.
+**Label-free diagnostic checks:** Diagnostic evaluation via `python -m analysis.real_checks --csv submissions/nirakshak.csv` returned 0 FAIL, 2 WARN:
 
-## 8. Results (to be filled after the real run)
+```
+WARN  tracking  walking-share bimodal  0  valley found
+WARN  ball      ball missing in D frames  0.601  <= 0.5
+```
 
-Nothing below has been measured on the provided game. Do not read the synthetic figures in section 5 as results.
+The diagnostic output reported the following verified properties of the tracking and prediction:
+- **Ball roughness**: `INFO ball roughness x m median / p99: 0.004 / 0.040`, `INFO ball roughness y m median / p99: 0.005 / 0.048`.
+- **Kick enrichment across thresholds**: `INFO kick player within 2 m (all usable frames): 0.515`; `INFO kick DV_KICK 3 m/s (/min, near share vs all): 20.72 /min, 0.587 vs 0.515`; `INFO kick DV_KICK 5 m/s (/min, near share vs all): 7.58 /min, 0.437 vs 0.515`; `INFO kick DV_KICK 8 m/s (/min, near share vs all): 1.47 /min, 0.211 vs 0.515`.
+- **Kickoff structure**: `INFO kickoff half 1/2 first live label alternates: A, H (alternates)`; `INFO kickoff post-goal kickoff side opposite to scorer: 4/4 holds`.
 
-| Item | Value |
-|---|---|
-| Possessions per half and total | TODO(result) |
-| Mean possession duration | TODO(result) |
-| Share of possessions under 3 s | TODO(result) |
-| Direct H<->A flicker per minute | TODO(result) |
-| Label counts H / A / D / X | TODO(result) |
-| `validate_submission.py` output | TODO(result): paste literal output |
-| `analysis.real_checks` output | TODO(result): paste literal output |
-| Private-set `spellF1` / `macroF1` | not available to the team |
+![Possession density across visible-ball frames (59.3% visible; 490 out-of-pitch frames excluded).](out/figures/possession_heatmap.png)
 
-## Claims to verify
+![Match timeline of decoded possession and stoppage sequences across both halves.](out/figures/possession_timeline.png)
 
-1. All "synthetic" numbers (0.648, +0.184, 53 vs 67, plateaus, cliff values) are copied from `mtah/experiments/briefs/VERDICT.md` and the briefs, not re-run for this document.
-2. "About 2 minutes" is quoted from the `tracking.py` docstring.
-3. "No `X` inside graded halves" is from reading `decode.py`; the real CSV has not been inspected.
-4. Home = first ATD team is an assumption from `starter/baseline.py` and DATA.md.
-5. Whether `HOLD` and `CLIP` were set after viewing synthetic dev seeds is not recorded in the briefs; ask lead.
-6. The WALK_MPS premise (real stoppage players walk below 2 m/s in the ATD speed unit) is unchecked until `analysis.real_checks` runs on the real data.
-7. The five section-3 rows formerly marked `UNJUSTIFIED - ask lead` (SPEED_LAG, DEAD_BIAS, W_SLOW/W_OUT, W_HSR, DEAD_COST) were decided in `mtah/experiments/briefs/DECISIONS.md`. Values are unchanged; the reasons are football priors or mechanism arguments, not fits, each with a pre-registered unlabeled check.
-8. Python 3.8 to 3.11 support is claimed from the pinned requirements; `sliding_window_view` needs numpy 1.20 or newer (pinned 1.24.4).
+## 5. Limitations
+
+**1. Unobserved ball tracking:** The ball is untracked on 40.7% of graded frames (64,643 of 158,857 frames), with longest continuous occlusion gaps of 138.6 s in Half 1 and 221.5 s in Half 2. Across these intervals, possession tracking relies entirely on the team of the last recorded touch and gap-midpoint handover logic.
+
+**2. Kick detector selectivity:** The kick detector barely isolates deliberate kicks on this dataset. As measured in the kick enrichment table, at `DV_KICK = 5.0` m/s, the share of kick events with a player within 2.0 m is 0.437, which is lower than the baseline player-near-ball proportion of 0.515 across all usable frames. At 8.0 m/s, it falls to 0.211. Spurious ball velocity spikes from bounces or tracking noise trigger kick detections without a player nearby.
+
+**3. Ball tracking smoothness and coordinate noise sensitivity:** The real ball trajectory is smooth to approximately 4 mm (roughness median: 0.004 m in x, 0.005 m in y), so raw coordinate noise is small. However, an in-memory perturbation stress test shows sharp sensitivity to ball coordinate jitter: adding Gaussian noise with sigma = 0.1 m alters 13,956 graded frames (8.7853%, seed 1100), while sigma = 0.3 m alters 33,749 graded frames (21.2449%, seed 1300), increasing direct flicker from 1.15-1.23 to 2.06-2.11 /min (measured on the decoder prior to its last two post-processing corrections).
+
+**4. Visibility and speed dropouts:** Blanking the ball on an extra 10% and 20% of visible frames in 2.0 s bursts changes 4.32% to 6.23% (10%) and 9.89% to 9.98% (20%) of graded frames. In contrast, dropping player speed on 10% of slots changes under 1.5% of graded frames (0.75% to 1.46% for entire slot columns; 0.20% for random entry dropout), as mean player speed averages across multiple players.
+
+**5. Dead-ball parameter sensitivity:** Predictions are highly sensitive to dead-ball thresholds. Perturbing `SLOW_SPEED` alters up to 45.18% of graded frames, `DEAD_BIAS` alters 26.10%, and `DEAD_SLOW_BONUS` alters 24.42%. None of these parameters was tuned against ground truth, and several lack direct empirical measurement. The top rows of the sensitivity table from `docs/PARAMETERS.md` are:
+
+| Rank | Constant / Parameter | Default Value | File Location | Change at 0.5x | Change at 2.0x | Max Impact |
+|---|---|---|---|---|---|---|
+| 1 | `fallback.SLOW_SPEED` | 1.5 m/s | `mtah/v2/fallback.py:39` | 22.05% | 45.18% | 45.18% |
+| 2 | `fallback.DEAD_BIAS` | -2.5 nats | `mtah/v2/fallback.py:41` | 26.10% | 25.95% | 26.10% |
+| 3 | `fallback.DEAD_SLOW_BONUS` | 3.0 nats | `mtah/v2/fallback.py:43` | 21.77% | 24.42% | 24.42% |
+| 4 | `fallback.SLOW_WIDTH` | 0.35 | `mtah/v2/fallback.py:40` | 9.82% | 18.40% | 18.40% |
+| 5 | `touch.HOLD` | 12 frames | `mtah/v2/touch.py:22` | 13.75% | 13.47% | 13.75% |
+| 6 | `touch.DV_KICK` | 5.0 m/s | `mtah/v2/touch.py:18` | 9.79% | 6.39% | 9.79% |
+
+**6. Walking-speed distribution:** The dead-ball cue assumes a clear division between walking and running, but `analysis.real_checks` reports `WARN tracking walking-share bimodal 0 valley found`. Without a clear valley in the walking-share distribution, setting `SLOW_SPEED = 1.5` m/s is an uncalibrated design choice.
+
+**7. Smart Tagging kickoff offset:** Kickoff tags precede the published kickoff frames in DATA.md and FAQ.md by 88 frames (3.5 s) in Half 1 and 82 frames (3.3 s) in Half 2. Consequently, Half 2 turns live approximately 3.3 s before the published kickoff frame. We state this plainly and do not correct it with an invented constant.
+
+**8. Kickoff initial possession evidence:** The first possession following a kickoff has weak touch evidence because the initial touch is brief.
+
+**9. Single match evaluation:** Evaluated on a single match (FC Barcelona vs Athletic Club). Constants have not been evaluated on other matches or under different tracking systems.
+
+**Future work:** With more time, we would model ball elevation or 3D trajectories to distinguish bounces and aerial passes from ground kicks, implement explicit restart-team attribution rules reflecting referee decisions and set-piece laws (Laws 13, 15, 17), and calibrate player stoppage speed thresholds adaptively from match-wide motion clustering without labels.
+
+## 6. Reproduction and Compliance
+
+**Reproduction:** Reproduction requires Python 3.8 to 3.11. The match data is licensed and not included in the repository.
+
+Single-command reproduction from repository root: `python -m mtah.reproduce --team nirakshak` (accepts optional `--data-dir PATH`; runs the audit, executes the decoder twice to verify determinism, validates the submission, evaluates real-data diagnostics, and checks the final SHA-256 digest `55fd9ef525637467ee6ef405c96bd9821b41d478afc8a5d488e1831a2f464b5f`).
+
+Step-by-step reproduction and verification commands:
+
+```bash
+python -m mtah.audit
+python -m mtah.run --team nirakshak
+python evaluation/validate_submission.py submissions/nirakshak.csv
+python -m analysis.real_checks --csv submissions/nirakshak.csv
+python -m mtah.run --team nirakshak --variant touch_only
+python -m mtah.guard
+python -m analysis.preflight --team nirakshak --sha256 55fd9ef525637467ee6ef405c96bd9821b41d478afc8a5d488e1831a2f464b5f --repo-url https://github.com/Ratnesh-101/more-than-a-hack
+```
+
+**Compliance statement:**
+- **Algorithmically generated labels**: Every label was generated entirely by deterministic code without human intervention or manual inspection.
+- **No human-produced match data**: No event data (Opta, StatsBomb, Wyscout, etc.) or manual tracking corrections were accessed or used.
+- **No full-match ground truth**: Full-match ground truth was never accessed or referenced.
+- **Public window check only**: The public 5-minute ground truth was evaluated once early in development solely to check format compliance and alignment; no subsequent code changes or parameter selections used it.
+- **Automatic Smart Tagging**: Smart Tagging was consumed strictly as an uncorrected automated stream for kickoff timestamps.
+- **No learned parameters**: The pipeline contains no learned parameters, no pre-trained weights, and no LLM in the pipeline.
+- **Data protection**: Competition match data is excluded from the repository via `.gitignore` and enforced by `mtah.guard`, preventing redistribution or raw coordinate export.
+- **Licensing**: The codebase and documentation are published under the MIT License (see `LICENSE`).
